@@ -63,6 +63,10 @@ namespace Tanks.Complete
             // Play the explosion sound effect.
             m_ExplosionAudio.Play();
 
+            // Add a little juice: shake the camera on impact.
+            if (CameraControl.Instance != null)
+                CameraControl.Instance.Shake(0.22f, 0.35f);
+
             // Once the particles have finished, destroy the gameobject they are on.
             ParticleSystem.MainModule mainModule = m_ExplosionParticles.main;
             Destroy (m_ExplosionParticles.gameObject, mainModule.duration);

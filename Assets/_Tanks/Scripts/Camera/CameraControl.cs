@@ -9,18 +9,28 @@ namespace Tanks.Complete
         public float m_MinSize = 6.5f;                  // The smallest orthographic size the camera can be.
         public Transform[] m_Targets;                   // All the targets the camera needs to encompass.
 
+        // Simple singleton so gameplay code (e.g. shell explosions) can trigger a screen shake without holding a reference.
+        public static CameraControl Instance { get; private set; }
 
         private Camera m_Camera;                        // Used for referencing the camera.
         private float m_ZoomSpeed;                      // Reference speed for the smooth damping of the orthographic size.
         private Vector3 m_MoveVelocity;                 // Reference velocity for the smooth damping of the position.
         private Vector3 m_DesiredPosition;              // The position the camera is moving towards.
 
-        private Vector3 m_AimToRig;                     // The offset to apply to the position so the child camera aim at the desired point 
+        private Vector3 m_AimToRig;                     // The offset to apply to the position so the child camera aim at the desired point
+
+        private Vector3 m_CameraBaseLocalPos;           // The resting local position of the child camera, restored after a shake.
+        private float m_ShakeTimeRemaining;             // How long the current shake still lasts.
+        private float m_ShakeDuration;                  // The full duration of the current shake (used to fade it out).
+        private float m_ShakeMagnitude;                 // The current shake strength.
 
         private void Awake ()
         {
+            Instance = this;
+
             m_Camera = GetComponentInChildren<Camera> ();
-            
+            m_CameraBaseLocalPos = m_Camera.transform.localPosition;
+
             // plane in which the camera rig is in
             Plane p = new Plane(Vector3.up, transform.position);
             Ray r = new Ray(m_Camera.transform.position, m_Camera.transform.forward);
@@ -141,6 +151,47 @@ namespace Tanks.Complete
 
             // Find and set the required size of the camera.
             m_Camera.orthographicSize = FindRequiredSize ();
+        }
+
+
+        // Triggers a short screen shake. The strongest active shake wins so several explosions in quick
+        // succession don't cancel each other out into a weak wobble.
+        public void Shake (float duration = 0.25f, float magnitude = 0.35f)
+        {
+            if (m_ShakeTimeRemaining > 0f && magnitude <= m_ShakeMagnitude)
+                return;
+
+            m_ShakeDuration = duration;
+            m_ShakeTimeRemaining = duration;
+            m_ShakeMagnitude = magnitude;
+        }
+
+
+        private void LateUpdate ()
+        {
+            if (m_Camera == null)
+                return;
+
+            if (m_ShakeTimeRemaining > 0f)
+            {
+                m_ShakeTimeRemaining -= Time.deltaTime;
+
+                // Fade the shake out over its lifetime so it settles smoothly.
+                float damper = m_ShakeDuration > 0f ? Mathf.Clamp01(m_ShakeTimeRemaining / m_ShakeDuration) : 0f;
+                Vector3 offset = UnityEngine.Random.insideUnitSphere * (m_ShakeMagnitude * damper);
+                m_Camera.transform.localPosition = m_CameraBaseLocalPos + offset;
+            }
+            else
+            {
+                m_Camera.transform.localPosition = m_CameraBaseLocalPos;
+            }
+        }
+
+
+        private void OnDestroy ()
+        {
+            if (Instance == this)
+                Instance = null;
         }
     }
 }

@@ -175,8 +175,9 @@ namespace Tanks.Complete
             // This code is not run until 'RoundEnding' has finished.  At which point, check if a game winner has been found.
             if (m_GameWinner != null)
             {
-                // If there is a game winner, restart the level.
-                SceneManager.LoadScene (0);
+                // If there is a game winner, return to the main menu so the player can pick again.
+                // Loaded by name (not index 0) because index 0 is now the Start screen.
+                SceneManager.LoadScene ("MainMenu");
             }
             else
             {
