@@ -12,6 +12,9 @@ EditorBuildSettings:
     path: Assets/_Tanks/Scenes/MainMenu.unity
     guid: 771e36c71b60d4b4db0333b7a15d8a41
   - enabled: 1
+    path: Assets/_Tanks/Scenes/Online.unity
+    guid: 9c9a9fc8909897843b9ef91bc978c265
+  - enabled: 1
     path: Assets/_Tanks/Scenes/Desert.unity
     guid: 37c9d2c08de91d04183fed69ef45a7bc
   - enabled: 1

@@ -76,7 +76,7 @@ namespace Tanks.Complete
             panelRt.anchorMin = new Vector2(0.5f, 0.5f);
             panelRt.anchorMax = new Vector2(0.5f, 0.5f);
             panelRt.pivot = new Vector2(0.5f, 0.5f);
-            panelRt.sizeDelta = new Vector2(700, 760);
+            panelRt.sizeDelta = new Vector2(700, 900);
             var vlg = panel.GetComponent<VerticalLayoutGroup>();
             vlg.childAlignment = TextAnchor.MiddleCenter;
             vlg.spacing = 22;
@@ -99,9 +99,26 @@ namespace Tanks.Complete
                 CreateButton(panel.transform, map.DisplayName, map.Color, 96, () => LoadMap(captured.SceneName));
             }
 
-            // Spacer + Quit
+            // Online play
             CreateSpacer(panel.transform, 20);
+            CreateButton(panel.transform, "PLAY ONLINE", new Color(0.24f, 0.50f, 0.72f), 96, PlayOnline);
+
+            // Spacer + Quit
+            CreateSpacer(panel.transform, 12);
             CreateButton(panel.transform, "QUIT", new Color(0.55f, 0.20f, 0.22f), 80, QuitGame);
+        }
+
+        private void PlayOnline()
+        {
+            const string onlineScene = "Online";
+            if (Application.CanStreamedLevelBeLoaded(onlineScene))
+            {
+                SceneManager.LoadScene(onlineScene);
+            }
+            else
+            {
+                Debug.LogError($"MainMenuController: scene '{onlineScene}' is not in Build Settings. Add it to File > Build Settings.");
+            }
         }
 
         private void LoadMap(string sceneName)
