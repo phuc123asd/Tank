@@ -5,20 +5,23 @@ EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
   m_Scenes:
-  - enabled: 1
+  - enabled: 0
     path: Assets/_Tanks/Scenes/Start.unity
     guid: 6bfb38c56943b534c94a88f2d0d37d06
-  - enabled: 1
+  - enabled: 0
     path: Assets/_Tanks/Scenes/MainMenu.unity
     guid: 771e36c71b60d4b4db0333b7a15d8a41
-  - enabled: 1
+  - enabled: 0
     path: Assets/_Tanks/Scenes/Desert.unity
     guid: 37c9d2c08de91d04183fed69ef45a7bc
-  - enabled: 1
+  - enabled: 0
     path: Assets/_Tanks/Scenes/Jungle.unity
     guid: 37961ba4d27bd46428d20c2ffe403dc3
-  - enabled: 1
+  - enabled: 0
     path: Assets/_Tanks/Scenes/Moon.unity
     guid: 7d48af2f9c7c14840abfc5e21827efaa
+  - enabled: 1
+    path: Assets/_Tanks/Scenes/TestNetworkScene.unity
+    guid: ddfc7acb883d54a879c8655f558cee9f
   m_configObjects:
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 7fb6c1c790fa04865b379a6e8ccd7e9c, type: 3}
