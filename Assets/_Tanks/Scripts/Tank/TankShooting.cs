@@ -37,6 +37,13 @@ namespace Tanks.Complete
         
         public bool m_IsComputerControlled { get; set; } = false;
 
+        /// <summary>
+        /// When set (by the online layer, see NetworkTankShooting), <see cref="Fire"/> raises this instead of
+        /// instantiating a local shell. Args: fire position, fire rotation, launch velocity, resolved damage,
+        /// explosion force, explosion radius. Null in the offline game, so offline firing is unchanged.
+        /// </summary>
+        public event System.Action<Vector3, Quaternion, Vector3, float, float, float> OnNetworkFire;
+
         private string m_FireButton;                // The input axis that is used for launching shells.
         private float m_CurrentLaunchForce;         // The force that will be given to the shell when the fire button is released.
         private float m_ChargeSpeed;                // How fast the launch force increases, based on the max charge time.
@@ -198,26 +205,16 @@ namespace Tanks.Complete
             // Set the fired flag so only Fire is only called once.
             m_Fired = true;
 
-            // Create an instance of the shell and store a reference to it's rigidbody.
-            Rigidbody shellInstance =
-                Instantiate (m_Shell, m_FireTransform.position, m_FireTransform.rotation) as Rigidbody;
+            Vector3 launchVelocity = m_CurrentLaunchForce * m_FireTransform.forward;
 
-            // Set the shell's velocity to the launch force in the fire position's forward direction.
-            shellInstance.linearVelocity = m_CurrentLaunchForce * m_FireTransform.forward;
-
-            ShellExplosion explosionData = shellInstance.GetComponent<ShellExplosion>();
-            explosionData.m_ExplosionForce = m_ExplosionForce;
-            explosionData.m_ExplosionRadius = m_ExplosionRadius;
-            explosionData.m_MaxDamage = m_MaxDamage;
-            
-            // Increase the damage if extra damage PowerUp is active
+            // Resolve the final damage up front (the special shell doubles it once, then is consumed).
+            float damage = m_MaxDamage;
             if (m_HasSpecialShell)
             {
-                explosionData.m_MaxDamage *= m_SpecialShellMultiplier;
-                // Reset the default values after increasing the damage of the fired shell
+                damage *= m_SpecialShellMultiplier;
                 m_HasSpecialShell = false;
                 m_SpecialShellMultiplier = 1f;
-                
+
                 PowerUpDetector powerUpDetector = GetComponent<PowerUpDetector>();
                 if (powerUpDetector != null)
                     powerUpDetector.m_HasActivePowerUp = false;
@@ -225,6 +222,27 @@ namespace Tanks.Complete
                 PowerUpHUD powerUpHUD = GetComponentInChildren<PowerUpHUD>();
                 if (powerUpHUD != null)
                     powerUpHUD.DisableActiveHUD();
+            }
+
+            if (OnNetworkFire != null)
+            {
+                // Online: the network layer spawns a server-authoritative shell. We never instantiate a
+                // local (non-authoritative) shell, which would diverge from the server's.
+                OnNetworkFire(m_FireTransform.position, m_FireTransform.rotation, launchVelocity,
+                    damage, m_ExplosionForce, m_ExplosionRadius);
+            }
+            else
+            {
+                // Offline: spawn the shell locally exactly as before.
+                Rigidbody shellInstance =
+                    Instantiate (m_Shell, m_FireTransform.position, m_FireTransform.rotation) as Rigidbody;
+
+                shellInstance.linearVelocity = launchVelocity;
+
+                ShellExplosion explosionData = shellInstance.GetComponent<ShellExplosion>();
+                explosionData.m_ExplosionForce = m_ExplosionForce;
+                explosionData.m_ExplosionRadius = m_ExplosionRadius;
+                explosionData.m_MaxDamage = damage;
             }
 
             // Change the clip to the firing clip and play it.

@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace Tanks.Complete
 {
@@ -19,6 +20,9 @@ namespace Tanks.Complete
 
         [Tooltip("Total players allowed in a room, including the host.")]
         public int m_MaxPlayers = 4;
+
+        [Tooltip("The networked gameplay scene the host loads (clients auto-sync to it via NGO).")]
+        public string m_ArenaSceneName = "Online_Arena";
 
         public string StatusMessage { get; private set; } = string.Empty;
         public string LobbyCode { get; private set; } = string.Empty;
@@ -75,6 +79,10 @@ namespace Tanks.Complete
                     await CleanupAfterFailureAsync();
                     return;
                 }
+
+                // Move everyone into the gameplay arena over the network. Only the server initiates the
+                // load; clients that join later are auto-synchronised to this scene by NGO.
+                NetworkManager.Singleton.SceneManager.LoadScene(m_ArenaSceneName, LoadSceneMode.Single);
 
                 StatusMessage = "Dang tao phong...";
                 LobbyCode = await LobbyManager.Ensure().CreateLobbyAsync("Tank Room", m_MaxPlayers, relayJoinCode);

@@ -110,14 +110,15 @@ namespace Tanks.Complete
 
         private void PlayOnline()
         {
-            const string onlineScene = "Online";
-            if (Application.CanStreamedLevelBeLoaded(onlineScene))
+            // Route through the login/register screen first; it loads the Online lobby once signed in.
+            const string loginScene = "Login";
+            if (Application.CanStreamedLevelBeLoaded(loginScene))
             {
-                SceneManager.LoadScene(onlineScene);
+                SceneManager.LoadScene(loginScene);
             }
             else
             {
-                Debug.LogError($"MainMenuController: scene '{onlineScene}' is not in Build Settings. Add it to File > Build Settings.");
+                Debug.LogError($"MainMenuController: scene '{loginScene}' is not in Build Settings. Add it to File > Build Settings.");
             }
         }
 

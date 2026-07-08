@@ -7,14 +7,16 @@ using UnityEngine;
 namespace Tanks.Complete
 {
     /// <summary>
-    /// Persistent bootstrap for Unity Gaming Services (UGS). Initializes the services SDK and signs
-    /// the player in anonymously (Phase 1). Username/password and Google sign-in are added later.
-    /// It survives scene loads (DontDestroyOnLoad) so the sign-in happens once per game session and
-    /// the same player identity is reused by the Lobby/Relay layers.
+    /// Persistent bootstrap for Unity Gaming Services (UGS). Initializes the services SDK and provides the
+    /// three sign-in paths the login screen uses: register (username/password), login (username/password)
+    /// and guest (anonymous). It no longer auto-signs-in on Awake — that would consume the session so the
+    /// login screen could not choose an account — it only initializes; the UI drives the actual sign-in.
+    ///
+    /// Survives scene loads (DontDestroyOnLoad) so the identity is reused by the Lobby/Relay layers.
     ///
     /// NOTE: UGS requires the project to be linked to a Unity Cloud project ID
-    /// (Edit > Project Settings > Services). Without that link InitializeAsync throws and the status
-    /// becomes Failed.
+    /// (Edit > Project Settings > Services). Username/Password also requires the "Username and Password"
+    /// sign-in method to be enabled in the Unity Cloud Authentication dashboard.
     /// </summary>
     public class UGSBootstrap : MonoBehaviour
     {
@@ -24,6 +26,7 @@ namespace Tanks.Complete
 
         public Status CurrentStatus { get; private set; } = Status.NotStarted;
         public string PlayerId { get; private set; } = string.Empty;
+        public string Username { get; private set; } = string.Empty;
         public string Profile { get; private set; } = string.Empty;
         public string LastError { get; private set; } = string.Empty;
 
@@ -31,10 +34,10 @@ namespace Tanks.Complete
         public event Action<Status> OnStatusChanged;
 
         public bool IsSignedIn => CurrentStatus == Status.SignedIn;
+        public bool IsInitialized => UnityServices.State == ServicesInitializationState.Initialized;
 
         /// <summary>
         /// Returns the singleton, creating a bootstrap GameObject if a scene needs UGS but none exists.
-        /// Mirrors the "self-contained, create-what-you-need" style used by the menus in this project.
         /// </summary>
         public static UGSBootstrap Ensure()
         {
@@ -49,7 +52,6 @@ namespace Tanks.Complete
 
         private void Awake()
         {
-            // Enforce a single persistent instance.
             if (Instance != null && Instance != this)
             {
                 Destroy(gameObject);
@@ -59,53 +61,96 @@ namespace Tanks.Complete
             Instance = this;
             DontDestroyOnLoad(gameObject);
 
-            // Kick off sign-in without blocking. Fire-and-forget is fine: status is exposed for the UI.
-            _ = InitializeAndSignInAsync();
+            // Initialize only — the login screen decides how to sign in.
+            _ = InitializeAsync();
         }
 
-        /// <summary>
-        /// Idempotent: safe to call multiple times. Initializes UGS and signs in anonymously.
-        /// </summary>
-        public async Task InitializeAndSignInAsync()
+        /// <summary>Idempotent: initialize the UGS SDK (no sign-in).</summary>
+        public async Task InitializeAsync()
         {
-            if (CurrentStatus == Status.Initializing
-                || CurrentStatus == Status.SigningIn
-                || CurrentStatus == Status.SignedIn)
-            {
+            if (IsInitialized)
                 return;
-            }
 
             try
             {
                 SetStatus(Status.Initializing);
-                // Use a distinct profile per process so two copies of the game on ONE machine get
-                // DIFFERENT player identities (they share persistentDataPath, so without this they'd
-                // restore the same cached anonymous account and collide: "player is already a member").
-                // A "-profile <name>" command-line arg pins it; otherwise a unique one is generated.
+
+                // Distinct profile per process so two copies on ONE machine keep separate session caches.
                 Profile = ResolveProfile();
 
-                if (UnityServices.State != ServicesInitializationState.Initialized)
-                {
-                    var options = new InitializationOptions();
-                    options.SetProfile(Profile);
-                    await UnityServices.InitializeAsync(options);
-                }
+                var options = new InitializationOptions();
+                options.SetProfile(Profile);
+                await UnityServices.InitializeAsync(options);
 
-                SetStatus(Status.SigningIn);
-                if (!AuthenticationService.Instance.IsSignedIn)
-                {
-                    await AuthenticationService.Instance.SignInAnonymouslyAsync();
-                }
-
-                PlayerId = AuthenticationService.Instance.PlayerId;
-                SetStatus(Status.SignedIn);
-                Debug.Log($"[UGS] Signed in anonymously. Profile = {Profile}, PlayerId = {PlayerId}");
+                SetStatus(AuthenticationService.Instance.IsSignedIn ? Status.SignedIn : Status.NotStarted);
             }
             catch (Exception e)
             {
                 LastError = e.Message;
                 SetStatus(Status.Failed);
-                Debug.LogError($"[UGS] Sign-in failed: {e}");
+                Debug.LogError($"[UGS] Initialize failed: {e}");
+            }
+        }
+
+        /// <summary>Register a new account with username + password, then sign in.</summary>
+        public Task<bool> RegisterAsync(string username, string password)
+        {
+            return RunAuthAsync(
+                () => AuthenticationService.Instance.SignUpWithUsernamePasswordAsync(username, password),
+                username, $"Đăng ký thành công: {username}");
+        }
+
+        /// <summary>Sign in to an existing username + password account.</summary>
+        public Task<bool> LoginAsync(string username, string password)
+        {
+            return RunAuthAsync(
+                () => AuthenticationService.Instance.SignInWithUsernamePasswordAsync(username, password),
+                username, $"Đăng nhập: {username}");
+        }
+
+        /// <summary>Anonymous "play as guest" sign-in.</summary>
+        public Task<bool> SignInAsGuestAsync()
+        {
+            return RunAuthAsync(
+                () => AuthenticationService.Instance.SignInAnonymouslyAsync(),
+                "Khách", "Đăng nhập khách");
+        }
+
+        // Backwards-compatible fallback used by OnlineGameConnector: ensure we are signed in somehow
+        // (as guest) if the player reached the online flow without logging in.
+        public async Task InitializeAndSignInAsync()
+        {
+            if (IsSignedIn)
+                return;
+
+            await SignInAsGuestAsync();
+        }
+
+        private async Task<bool> RunAuthAsync(Func<Task> authCall, string displayName, string successLog)
+        {
+            try
+            {
+                await InitializeAsync();
+
+                // Start from a clean slate so switching accounts / guest->account works.
+                if (AuthenticationService.Instance.IsSignedIn)
+                    AuthenticationService.Instance.SignOut();
+
+                SetStatus(Status.SigningIn);
+                await authCall();
+
+                PlayerId = AuthenticationService.Instance.PlayerId;
+                Username = displayName;
+                SetStatus(Status.SignedIn);
+                Debug.Log($"[UGS] {successLog}. PlayerId = {PlayerId}");
+                return true;
+            }
+            catch (Exception e)
+            {
+                LastError = FriendlyError(e);
+                SetStatus(Status.Failed);
+                Debug.LogError($"[UGS] Auth failed: {e}");
+                return false;
             }
         }
 
@@ -115,8 +160,23 @@ namespace Tanks.Complete
             OnStatusChanged?.Invoke(status);
         }
 
+        // Turn common UGS auth exceptions into short Vietnamese hints for the login screen.
+        private static string FriendlyError(Exception e)
+        {
+            string m = e.Message ?? string.Empty;
+            if (m.Contains("already exists") || m.Contains("USERNAME_ALREADY_EXISTS"))
+                return "Tên đăng nhập đã tồn tại.";
+            if (m.Contains("Invalid username or password") || m.Contains("WRONG_USERNAME_PASSWORD"))
+                return "Sai tên đăng nhập hoặc mật khẩu.";
+            if (m.Contains("password"))
+                return "Mật khẩu phải 8-30 ký tự, gồm chữ hoa, chữ thường, số và ký tự đặc biệt.";
+            if (m.Contains("username"))
+                return "Tên đăng nhập 3-20 ký tự (chữ, số, . _ -).";
+            return m;
+        }
+
         // Pick the UGS profile: a "-profile <name>" command-line arg if present, otherwise a unique
-        // per-process name so each running copy is a distinct player. Profile must match [A-Za-z0-9_-].
+        // per-process name so each running copy keeps a distinct session cache. Profile must match [A-Za-z0-9_-].
         private static string ResolveProfile()
         {
             var args = System.Environment.GetCommandLineArgs();
@@ -148,12 +208,12 @@ namespace Tanks.Complete
         {
             switch (CurrentStatus)
             {
-                case Status.NotStarted:  return "Chua khoi dong";
-                case Status.Initializing: return "Dang khoi tao dich vu...";
-                case Status.SigningIn:   return "Dang dang nhap...";
-                case Status.SignedIn:    return $"Da dang nhap ({Profile})\nID: {PlayerId}";
-                case Status.Failed:      return $"Dang nhap that bai:\n{LastError}";
-                default:                 return string.Empty;
+                case Status.NotStarted:   return "Chưa đăng nhập";
+                case Status.Initializing: return "Đang khởi tạo dịch vụ...";
+                case Status.SigningIn:    return "Đang đăng nhập...";
+                case Status.SignedIn:     return $"Đã đăng nhập: {Username}";
+                case Status.Failed:       return $"Lỗi: {LastError}";
+                default:                  return string.Empty;
             }
         }
     }
