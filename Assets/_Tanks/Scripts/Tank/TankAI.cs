@@ -70,7 +70,7 @@ namespace Tanks.Complete
             
             // We use FindObjectByType to get all Tanks, to not depend on GameManager so user can try adding AI in an
             // empty scene where no GameManager was added yet.
-            m_AllTanks = FindObjectsByType<TankMovement>(FindObjectsInactive.Exclude, FindObjectsSortMode.None).Select(e => e.gameObject).ToArray();
+            m_AllTanks = FindObjectsByType<TankMovement>(FindObjectsInactive.Exclude).Select(e => e.gameObject).ToArray();
         }
 
         // If a GameManager exist, it will call this function after creating a computer controlled tank. This just replace
