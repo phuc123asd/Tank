@@ -4,60 +4,37 @@ using UnityEngine;
 
 namespace Tanks.Complete
 {
-    public class PowerUpSpawner : NetworkBehaviour
+    public class PowerUpSpawner : MonoBehaviour
     {
         [Tooltip("Array that holds different power-up prefabs that can be spawned.")]
         public PowerUp[] m_PowerUps;
         [Tooltip("Time in seconds that will wait this spawner to instantiate a new power up when collected the new one.")]
         public float m_RespawnCooldown = 20f;
 
-        private readonly NetworkVariable<int> m_SelectedPowerUpIndex = new(
-            -1,
-            NetworkVariableReadPermission.Everyone,
-            NetworkVariableWritePermission.Server);
-
         private PowerUp m_SpawnedPowerUp;
         private bool m_IsRespawning;
 
-        public override void OnNetworkSpawn()
+        private void Start()
         {
-            m_SelectedPowerUpIndex.OnValueChanged += OnSelectedPowerUpChanged;
-
-            // A late-joining client must immediately display the server's current item.
-            ApplySelectedPowerUp(m_SelectedPowerUpIndex.Value);
-
-            // Only the server is allowed to choose the random item.
-            if (IsServer && m_SelectedPowerUpIndex.Value < 0)
+            if (!IsOnlineMatch() || NetworkManager.Singleton.IsServer)
                 SelectRandomPowerUp();
-        }
-
-        public override void OnNetworkDespawn()
-        {
-            m_SelectedPowerUpIndex.OnValueChanged -= OnSelectedPowerUpChanged;
-            DestroySpawnedPowerUp();
         }
 
         public void CollectPowerUp()
         {
-            if (IsServer)
+            if (!IsOnlineMatch())
                 BeginRespawn();
             else
-                CollectPowerUpServerRpc();
+                FindAnyObjectByType<GameManager>()?.RequestPowerUpRespawn(transform.position);
         }
 
-        [ServerRpc(RequireOwnership = false)]
-        private void CollectPowerUpServerRpc()
-        {
-            BeginRespawn();
-        }
-
-        private void BeginRespawn()
+        public void BeginRespawn()
         {
             if (m_IsRespawning)
                 return;
 
             m_IsRespawning = true;
-            m_SelectedPowerUpIndex.Value = -1;
+            BroadcastSelection(-1);
             StartCoroutine(RespawnPowerUp());
         }
 
@@ -70,18 +47,21 @@ namespace Tanks.Complete
 
         private void SelectRandomPowerUp()
         {
-            if (!IsServer || m_PowerUps == null || m_PowerUps.Length == 0)
+            if (m_PowerUps == null || m_PowerUps.Length == 0)
                 return;
 
-            m_SelectedPowerUpIndex.Value = Random.Range(0, m_PowerUps.Length);
+            BroadcastSelection(Random.Range(0, m_PowerUps.Length));
         }
 
-        private void OnSelectedPowerUpChanged(int previousIndex, int currentIndex)
+        private void BroadcastSelection(int selectedIndex)
         {
-            ApplySelectedPowerUp(currentIndex);
+            if (!IsOnlineMatch())
+                ApplySelectedPowerUp(selectedIndex);
+            else if (NetworkManager.Singleton.IsServer)
+                FindAnyObjectByType<GameManager>()?.SyncPowerUpSelection(transform.position, selectedIndex);
         }
 
-        private void ApplySelectedPowerUp(int selectedIndex)
+        public void ApplySelectedPowerUp(int selectedIndex)
         {
             DestroySpawnedPowerUp();
 
@@ -101,6 +81,11 @@ namespace Tanks.Complete
 
             Destroy(m_SpawnedPowerUp.gameObject);
             m_SpawnedPowerUp = null;
+        }
+
+        private static bool IsOnlineMatch()
+        {
+            return NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening;
         }
     }
 }

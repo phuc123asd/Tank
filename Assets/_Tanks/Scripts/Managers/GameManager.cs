@@ -100,6 +100,58 @@ namespace Tanks.Complete
                 m_TitleTextSync.Value = text;
             }
         }
+
+        public void SyncPowerUpSelection(Vector3 spawnerPosition, int selectedIndex)
+        {
+            if (!IsServer)
+                return;
+
+            SyncPowerUpSelectionClientRpc(spawnerPosition, selectedIndex);
+        }
+
+        public void RequestPowerUpRespawn(Vector3 spawnerPosition)
+        {
+            if (IsServer)
+                BeginPowerUpRespawn(spawnerPosition);
+            else
+                RequestPowerUpRespawnServerRpc(spawnerPosition);
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        private void RequestPowerUpRespawnServerRpc(Vector3 spawnerPosition)
+        {
+            BeginPowerUpRespawn(spawnerPosition);
+        }
+
+        [ClientRpc]
+        private void SyncPowerUpSelectionClientRpc(Vector3 spawnerPosition, int selectedIndex)
+        {
+            FindPowerUpSpawner(spawnerPosition)?.ApplySelectedPowerUp(selectedIndex);
+        }
+
+        private void BeginPowerUpRespawn(Vector3 spawnerPosition)
+        {
+            FindPowerUpSpawner(spawnerPosition)?.BeginRespawn();
+        }
+
+        private static PowerUpSpawner FindPowerUpSpawner(Vector3 position)
+        {
+            PowerUpSpawner closest = null;
+            float closestDistance = float.MaxValue;
+
+            foreach (var spawner in FindObjectsByType<PowerUpSpawner>(FindObjectsSortMode.None))
+            {
+                float distance = (spawner.transform.position - position).sqrMagnitude;
+                if (distance < closestDistance)
+                {
+                    closest = spawner;
+                    closestDistance = distance;
+                }
+            }
+
+            return closestDistance <= 0.01f ? closest : null;
+        }
+
         private GameState m_CurrentState;
         
         private int m_RoundNumber;                  // Which round the game is currently on.
