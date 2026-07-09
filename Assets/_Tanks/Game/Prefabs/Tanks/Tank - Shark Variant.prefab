@@ -8,9 +8,13 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 0}
     m_Modifications:
+    - target: {fileID: -8135494484627597368, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 2348278087
+      objectReference: {fileID: 0}
     - target: {fileID: 173472, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
       propertyPath: m_Name
-      value: Demo_Tank - Shark Variant
+      value: Tank - Shark Variant
       objectReference: {fileID: 0}
     - target: {fileID: 446194, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
       propertyPath: m_LocalPosition.x
@@ -109,6 +113,11 @@ PrefabInstance:
       addedObject: {fileID: 7407967995094973317}
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
+--- !u!1 &2259141219951711155 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 173472, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
+  m_PrefabInstance: {fileID: 2259141219951621651}
+  m_PrefabAsset: {fileID: 0}
 --- !u!4 &2259141219951999201 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 446194, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}

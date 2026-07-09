@@ -1,10 +1,11 @@
-﻿using UnityEngine;
+using UnityEngine;
+using Unity.Netcode;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 namespace Tanks.Complete
 {
-    public class TankShooting : MonoBehaviour
+    public class TankShooting : NetworkBehaviour
     {
         public Rigidbody m_Shell;                   // Prefab of the shell.
         public Transform m_FireTransform;           // A child of the tank where the shells are spawned.
@@ -70,6 +71,7 @@ namespace Tanks.Complete
 
         private void Start ()
         {
+            if (IsSpawned && !IsOwner) return;
             // The fire axis is based on the player number.
             m_FireButton = "Fire";
             fireAction = m_InputUser.ActionAsset.FindAction(m_FireButton);
@@ -83,6 +85,7 @@ namespace Tanks.Complete
 
         private void Update ()
         {
+            if (IsSpawned && !IsOwner) return;
             // Computer and Human control Tank use 2 different update functions 
             if (!m_IsComputerControlled)
             {
@@ -195,46 +198,72 @@ namespace Tanks.Complete
 
         private void Fire ()
         {
-            // Set the fired flag so only Fire is only called once.
             m_Fired = true;
+            
+            if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+            {
+                Debug.Log($"[Shoot] '{name}' Fire() -> FireServerRpc (IsOwner={IsOwner}, force={m_CurrentLaunchForce:0.0}).");
+                FireServerRpc(m_FireTransform.position, m_FireTransform.rotation, m_CurrentLaunchForce, m_HasSpecialShell, m_SpecialShellMultiplier);
+            }
+            else
+            {
+                Rigidbody shellInstance = Instantiate (m_Shell, m_FireTransform.position, m_FireTransform.rotation) as Rigidbody;
+                shellInstance.linearVelocity = m_CurrentLaunchForce * m_FireTransform.forward;
 
-            // Create an instance of the shell and store a reference to it's rigidbody.
-            Rigidbody shellInstance =
-                Instantiate (m_Shell, m_FireTransform.position, m_FireTransform.rotation) as Rigidbody;
+                ShellExplosion explosionData = shellInstance.GetComponent<ShellExplosion>();
+                explosionData.m_ExplosionForce = m_ExplosionForce;
+                explosionData.m_ExplosionRadius = m_ExplosionRadius;
+                explosionData.m_MaxDamage = m_MaxDamage;
 
-            // Set the shell's velocity to the launch force in the fire position's forward direction.
-            shellInstance.linearVelocity = m_CurrentLaunchForce * m_FireTransform.forward;
+                if (m_HasSpecialShell)
+                {
+                    explosionData.m_MaxDamage *= m_SpecialShellMultiplier;
+                }
+
+                m_ShootingAudio.clip = m_FireClip;
+                m_ShootingAudio.Play();
+            }
+
+            m_CurrentLaunchForce = m_MinLaunchForce;
+            m_ShotCooldownTimer = m_ShotCooldown;
+        }
+
+        [ServerRpc]
+        private void FireServerRpc(Vector3 spawnPos, Quaternion spawnRot, float launchForce, bool hasSpecial, float specialMultiplier)
+        {
+            Debug.Log($"[Shoot] FireServerRpc chạy trên server cho '{name}' (owner={OwnerClientId}).");
+            Rigidbody shellInstance = Instantiate (m_Shell, spawnPos, spawnRot) as Rigidbody;
+            var netObj = shellInstance.GetComponent<NetworkObject>();
+            netObj.Spawn();
+            shellInstance.linearVelocity = launchForce * (spawnRot * Vector3.forward);
 
             ShellExplosion explosionData = shellInstance.GetComponent<ShellExplosion>();
             explosionData.m_ExplosionForce = m_ExplosionForce;
             explosionData.m_ExplosionRadius = m_ExplosionRadius;
             explosionData.m_MaxDamage = m_MaxDamage;
-            
-            // Increase the damage if extra damage PowerUp is active
-            if (m_HasSpecialShell)
-            {
-                explosionData.m_MaxDamage *= m_SpecialShellMultiplier;
-                // Reset the default values after increasing the damage of the fired shell
-                m_HasSpecialShell = false;
-                m_SpecialShellMultiplier = 1f;
-                
-                PowerUpDetector powerUpDetector = GetComponent<PowerUpDetector>();
-                if (powerUpDetector != null)
-                    powerUpDetector.m_HasActivePowerUp = false;
 
-                PowerUpHUD powerUpHUD = GetComponentInChildren<PowerUpHUD>();
-                if (powerUpHUD != null)
-                    powerUpHUD.DisableActiveHUD();
+            if (hasSpecial)
+            {
+                explosionData.m_MaxDamage *= specialMultiplier;
             }
 
-            // Change the clip to the firing clip and play it.
+            FireClientRpc(launchForce, netObj.NetworkObjectId);
+        }
+
+        [ClientRpc]
+        private void FireClientRpc(float launchForce, ulong networkObjectId)
+        {
             m_ShootingAudio.clip = m_FireClip;
-            m_ShootingAudio.Play ();
+            m_ShootingAudio.Play();
 
-            // Reset the launch force.  This is a precaution in case of missing button events.
-            m_CurrentLaunchForce = m_MinLaunchForce;
-
-            m_ShotCooldownTimer = m_ShotCooldown;
+            if (!IsServer && NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(networkObjectId, out var shellNetObj))
+            {
+                var rb = shellNetObj.GetComponent<Rigidbody>();
+                if (rb != null)
+                {
+                    rb.linearVelocity = launchForce * (shellNetObj.transform.rotation * Vector3.forward);
+                }
+            }
         }
 
 

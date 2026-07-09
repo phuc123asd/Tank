@@ -52,7 +52,12 @@ namespace Tanks.Complete
             var labelTmp = CreateTMP(fillGo.transform, "Label", label, fontSize, FontStyles.Bold | FontStyles.Italic, m_TextDark);
             labelTmp.characterSpacing = 4f;
 
-            button.onClick.AddListener(onClick);
+            // [DEBUG] Bọc onClick để log mọi lần bấm — giúp dò nút "chết" (không có listener / bị chặn raycast).
+            button.onClick.AddListener(() =>
+            {
+                Debug.Log($"[Lobby1v1][Click] Nút '{label}' được bấm (interactable={button.interactable}, hasHandler={onClick != null}).");
+                onClick?.Invoke();
+            });
             return button;
         }
 

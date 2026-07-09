@@ -1,4 +1,5 @@
-using UnityEngine;
+﻿using UnityEngine;
+using Unity.Netcode;
 
 namespace Tanks.Complete
 {
@@ -24,55 +25,46 @@ namespace Tanks.Complete
 
         private void OnTriggerEnter (Collider other)
         {
-			// Collect all the colliders in a sphere from the shell's current position to a radius of the explosion radius.
             Collider[] colliders = Physics.OverlapSphere (transform.position, m_ExplosionRadius, m_TankMask);
+            bool isOffline = NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening;
 
-            // Go through all the colliders...
-            for (int i = 0; i < colliders.Length; i++)
+            if (isOffline || NetworkManager.Singleton.IsServer)
             {
-                // ... and find their rigidbody.
-                Rigidbody targetRigidbody = colliders[i].GetComponent<Rigidbody> ();
+                for (int i = 0; i < colliders.Length; i++)
+                {
+                    Rigidbody targetRigidbody = colliders[i].GetComponent<Rigidbody> ();
+                    if (!targetRigidbody)
+                        continue;
 
-                // If they don't have a rigidbody, go on to the next collider.
-                if (!targetRigidbody)
-                    continue;
+                    targetRigidbody.GetComponent<TankMovement>().AddExplosionForce(m_ExplosionForce, transform.position, m_ExplosionRadius);
 
-                // Add an explosion force.
-                targetRigidbody.GetComponent<TankMovement>().AddExplosionForce(m_ExplosionForce, transform.position, m_ExplosionRadius);
+                    TankHealth targetHealth = targetRigidbody.GetComponent<TankHealth> ();
+                    if (!targetHealth)
+                        continue;
 
-                // Find the TankHealth script associated with the rigidbody.
-                TankHealth targetHealth = targetRigidbody.GetComponent<TankHealth> ();
-
-                // If there is no TankHealth script attached to the gameobject, go on to the next collider.
-                if (!targetHealth)
-                    continue;
-
-                // Calculate the amount of damage the target should take based on it's distance from the shell.
-                float damage = CalculateDamage (targetRigidbody.position);
-
-                // Deal this damage to the tank.
-                targetHealth.TakeDamage (damage);
+                    float damage = CalculateDamage (targetRigidbody.position);
+                    targetHealth.TakeDamage (damage);
+                }
             }
 
-            // Unparent the particles from the shell.
             m_ExplosionParticles.transform.parent = null;
-
-            // Play the particle system.
             m_ExplosionParticles.Play();
-
-            // Play the explosion sound effect.
             m_ExplosionAudio.Play();
 
-            // Add a little juice: shake the camera on impact.
             if (CameraControl.Instance != null)
                 CameraControl.Instance.Shake(0.22f, 0.35f);
 
-            // Once the particles have finished, destroy the gameobject they are on.
             ParticleSystem.MainModule mainModule = m_ExplosionParticles.main;
             Destroy (m_ExplosionParticles.gameObject, mainModule.duration);
 
-            // Destroy the shell.
-            Destroy (gameObject);
+            if (isOffline)
+            {
+                Destroy(gameObject);
+            }
+            else if (NetworkManager.Singleton.IsServer)
+            {
+                GetComponent<NetworkObject>().Despawn();
+            }
         }
 
 

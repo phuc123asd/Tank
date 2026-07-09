@@ -114,8 +114,19 @@ namespace Tanks.Complete
         // Used at the start of each round to put the tank into it's default state.
         public void Reset ()
         {
-            m_Instance.transform.position = m_SpawnPoint.position;
-            m_Instance.transform.rotation = m_SpawnPoint.rotation;
+            // [ONLINE] Xe dùng NetworkTransform Owner-authoritative. Nếu chiếc xe này do một máy KHÁC
+            // sở hữu (server đang chạy Reset nhưng không phải owner), server không thể dịch chuyển nó
+            // trực tiếp -> nhờ owner tự đặt lại vị trí qua RPC. Ngược lại (offline, hoặc xe server tự
+            // sở hữu) thì đặt trực tiếp như cũ.
+            if (m_Movement != null && m_Movement.IsSpawned && !m_Movement.IsOwner)
+            {
+                m_Movement.TeleportRpc(m_SpawnPoint.position, m_SpawnPoint.rotation);
+            }
+            else
+            {
+                m_Instance.transform.position = m_SpawnPoint.position;
+                m_Instance.transform.rotation = m_SpawnPoint.rotation;
+            }
 
             m_Instance.SetActive (false);
             m_Instance.SetActive (true);

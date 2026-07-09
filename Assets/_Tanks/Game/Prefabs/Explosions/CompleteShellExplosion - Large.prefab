@@ -10,7 +10,7 @@ PrefabInstance:
     m_Modifications:
     - target: {fileID: 195792, guid: 537afde59eeba4c82897def1dccfba0a, type: 3}
       propertyPath: m_Name
-      value: Demo_CompleteShellExplosion - Large
+      value: CompleteShellExplosion - Large
       objectReference: {fileID: 0}
     - target: {fileID: 486730, guid: 537afde59eeba4c82897def1dccfba0a, type: 3}
       propertyPath: m_LocalPosition.x
@@ -83,5 +83,39 @@ PrefabInstance:
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 195792, guid: 537afde59eeba4c82897def1dccfba0a, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: -6857126517535240231}
   m_SourcePrefab: {fileID: 100100000, guid: 537afde59eeba4c82897def1dccfba0a, type: 3}
+--- !u!1 &4492283343712527022 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 195792, guid: 537afde59eeba4c82897def1dccfba0a, type: 3}
+  m_PrefabInstance: {fileID: 4492283343712378494}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &-6857126517535240231
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4492283343712527022}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.NetworkObject
+  GlobalObjectIdHash: 0
+  InScenePlacedSourceGlobalObjectIdHash: 0
+  DeferredDespawnTick: 0
+  Ownership: 1
+  AlwaysReplicateAsRoot: 0
+  SynchronizeTransform: 1
+  <InScenePlaced>k__BackingField: 0
+  ActiveSceneSynchronization: 0
+  SceneMigrationSynchronization: 1
+  SpawnWithObservers: 1
+  DontDestroyWithOwner: 0
+  AutoObjectParentSync: 1
+  SyncOwnerTransformWhenParented: 1
+  AllowOwnerToParent: 0

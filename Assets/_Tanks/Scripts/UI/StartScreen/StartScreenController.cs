@@ -1,4 +1,4 @@
-using TMPro;
+﻿using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem.UI;
@@ -97,6 +97,8 @@ namespace Tanks.Complete
         {
             if (Application.isPlaying)
             {
+                Cursor.visible = true;
+                Cursor.lockState = CursorLockMode.None;
                 EnsureEventSystem();
                 EnsureUGSManager();
 
@@ -112,6 +114,43 @@ namespace Tanks.Complete
                 {
                     MusicManager.PlayMusic(m_BackgroundMusic);
                 }
+            }
+        }
+
+        private void Start()
+        {
+            if (Application.isPlaying)
+            {
+                Cursor.visible = true;
+                Cursor.lockState = CursorLockMode.None;
+
+                var ugs = UGSManager.Instance;
+                if (ugs != null)
+                {
+                    ugs.OnPlayerSignedIn += HandleAutoLogin;
+                    if (ugs.IsSignedIn)
+                    {
+                        HandleAutoLogin(ugs.PlayerId);
+                    }
+                }
+            }
+        }
+
+        private void OnDestroy()
+        {
+            var ugs = UGSManager.Instance;
+            if (ugs != null)
+            {
+                ugs.OnPlayerSignedIn -= HandleAutoLogin;
+            }
+        }
+
+        private void HandleAutoLogin(string playerId)
+        {
+            Debug.Log($"[StartScreen] Tự động đăng nhập thành công. Chuyển tới MainMenu cho Player ID: {playerId}");
+            if (Application.CanStreamedLevelBeLoaded(m_NextScene))
+            {
+                SceneManager.LoadScene(m_NextScene);
             }
         }
 

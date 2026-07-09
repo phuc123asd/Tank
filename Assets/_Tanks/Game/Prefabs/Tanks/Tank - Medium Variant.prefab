@@ -8,9 +8,13 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 0}
     m_Modifications:
+    - target: {fileID: -8135494484627597368, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 2517858152
+      objectReference: {fileID: 0}
     - target: {fileID: 173472, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
       propertyPath: m_Name
-      value: Demo_Tank - Medium Variant
+      value: Tank - Medium Variant
       objectReference: {fileID: 0}
     - target: {fileID: 446194, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
       propertyPath: m_LocalPosition.x
@@ -104,6 +108,11 @@ PrefabInstance:
 --- !u!4 &2204552607318958738 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 446194, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
+  m_PrefabInstance: {fileID: 2204552607319370848}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1 &2204552607319198144 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 173472, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
   m_PrefabInstance: {fileID: 2204552607319370848}
   m_PrefabAsset: {fileID: 0}
 --- !u!1001 &5671960245825206408

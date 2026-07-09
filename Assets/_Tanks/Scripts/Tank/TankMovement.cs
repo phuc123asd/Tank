@@ -1,4 +1,5 @@
 ﻿using UnityEngine;
+using Unity.Netcode;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.Users;
 
@@ -7,7 +8,7 @@ namespace Tanks.Complete
     //Ensure it run before the TankShooting component as TankShooting grabs the InputUser from this when there are no
     //GameManager set (used during learning experience to test tank in empty scenes)
     [DefaultExecutionOrder(-10)]
-    public class TankMovement : MonoBehaviour
+    public class TankMovement : NetworkBehaviour
     {
         [Tooltip("The player number. Without a tank selection menu, Player 1 is left keyboard control, Player 2 is right keyboard")]
         public int m_PlayerNumber = 1;              // Used to identify which tank belongs to which player.  This is set by this tank's manager.
@@ -65,8 +66,14 @@ namespace Tanks.Complete
 
         private void OnEnable ()
         {
-            // Computer controlled tank are kinematic
-            m_Rigidbody.isKinematic = false;
+            if (IsSpawned && !IsOwner)
+            {
+                m_Rigidbody.isKinematic = true;
+            }
+            else
+            {
+                m_Rigidbody.isKinematic = false;
+            }
 
             // Also reset the input values and explosion force.
             m_MovementInputValue = 0f;
@@ -97,8 +104,37 @@ namespace Tanks.Complete
         }
 
 
+        public override void OnNetworkSpawn()
+        {
+            if (!IsOwner)
+            {
+                m_Rigidbody.isKinematic = true;
+            }
+        }
+
+        // [ONLINE] NetworkTransform ở chế độ Owner-authoritative: server KHÔNG thể dịch chuyển xe
+        // do client khác sở hữu. Khi reset vòng đấu, server gọi RPC này để chính owner tự đặt lại
+        // vị trí/hướng và xoá vận tốc, nhờ đó vị trí mới mới được đồng bộ cho mọi máy.
+        [Rpc(SendTo.Owner)]
+        public void TeleportRpc(Vector3 position, Quaternion rotation)
+        {
+            transform.SetPositionAndRotation(position, rotation);
+            if (m_Rigidbody != null)
+            {
+                m_Rigidbody.position = position;
+                m_Rigidbody.rotation = rotation;
+                if (!m_Rigidbody.isKinematic)
+                {
+                    m_Rigidbody.linearVelocity = Vector3.zero;
+                    m_Rigidbody.angularVelocity = Vector3.zero;
+                }
+            }
+            m_ExplosionForceValue = Vector3.zero;
+        }
+
         private void Start ()
         {
+            if (IsSpawned && !IsOwner) return;
             // If this is computer controlled...
             if (m_IsComputerControlled)
             {
@@ -113,10 +149,18 @@ namespace Tanks.Complete
                 }
             }
 
-            // If no control index was set, this mean this is a scene without a GameManager and that tank was manually
-            // added to an empty scene, so we used the manually set Player Number in the Inspector as the ControlIndex,
-            // so Player 1 will be ControlIndex 1 -> KeyboardLeft and Player 2 -> KeyboardRight
-            if (ControlIndex == -1 && !m_IsComputerControlled)
+            // [ONLINE] Trong chế độ mạng, mỗi máy là MỘT người chơi cục bộ, chỉ điều khiển chiếc xe
+            // mình sở hữu (đến đây chắc chắn là owner vì non-owner đã return ở đầu hàm). Vì vậy luôn
+            // dùng bộ điều khiển CHÍNH (ControlIndex 1 -> KeyboardLeft: WASD + Space). Nếu để theo
+            // m_PlayerNumber (=2 do menu gán), xe của client sẽ rơi vào KeyboardRight (mũi tên + Enter)
+            // khiến người chơi bấm WASD/Space không tác dụng -> di chuyển/bắn "không hoạt động".
+            if (IsSpawned && !m_IsComputerControlled)
+            {
+                ControlIndex = 1;
+            }
+            // Ngoài mạng (test xe trong scene trống, không có GameManager): dùng Player Number đã đặt
+            // trong Inspector -> Player 1 = KeyboardLeft, Player 2 = KeyboardRight.
+            else if (ControlIndex == -1 && !m_IsComputerControlled)
             {
                 ControlIndex = m_PlayerNumber;
             }
@@ -136,6 +180,8 @@ namespace Tanks.Complete
                 // otherwise if no mobile ui control is active, ControlIndex is KeyboardLeft scheme and ControlIndex 2 is KeyboardRight
                 m_InputUser.ActivateScheme(ControlIndex == 1 ? "KeyboardLeft" : "KeyboardRight");
             }
+
+            Debug.Log($"[Tank] '{name}' setup input: IsSpawned={IsSpawned}, IsOwner={IsOwner}, ControlIndex={ControlIndex} (1=WASD+Space, 2=Arrows+Enter).");
 
             // The axes names are based on player number.
             m_MovementAxisName = "Vertical";
@@ -163,6 +209,7 @@ namespace Tanks.Complete
 
         private void Update ()
         {
+            if (IsSpawned && !IsOwner) return;
             // Computer controlled tank will be moved by the TankAI component, so only read input for player controlled tanks
             if (!m_IsComputerControlled)
             {
@@ -207,6 +254,7 @@ namespace Tanks.Complete
 
         private void FixedUpdate ()
         {
+            if (IsSpawned && !IsOwner) return;
             if (m_IsComputerControlled)
             {
                 return;

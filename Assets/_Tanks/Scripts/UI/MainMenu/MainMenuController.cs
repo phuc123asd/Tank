@@ -18,13 +18,14 @@ namespace Tanks.Complete
     /// </summary>
     public partial class MainMenuController : MonoBehaviour
     {
-        public enum MenuState { Home, ModeSelect, Lobby5v5, OfflineMapSelect }
+        public enum MenuState { Home, ModeSelect, Lobby5v5, Lobby1v1, OfflineMapSelect }
 
         private MenuState m_CurrentState = MenuState.Home;
 
         [SerializeField] private GameObject m_HomePanel;
         [SerializeField] private GameObject m_ModeSelectPanel;
         [SerializeField] private GameObject m_Lobby5v5Panel;
+        [SerializeField] private GameObject m_Lobby1v1Panel;
         [SerializeField] private GameObject m_OfflineMapSelectPanel;
 
         // --- Bảng màu chuẩn Vibe "Tanks!" ---
@@ -46,7 +47,7 @@ namespace Tanks.Complete
         private void Awake()
         {
             EnsureEventSystem();
-            
+
             if (m_MusicHome == null)
             {
 #if UNITY_EDITOR
@@ -69,12 +70,26 @@ namespace Tanks.Complete
                 m_HomePanel = existingCanvas.Find("HomePanel")?.gameObject;
                 m_ModeSelectPanel = existingCanvas.Find("ModeSelectPanel")?.gameObject;
                 m_Lobby5v5Panel = existingCanvas.Find("Lobby5v5Panel")?.gameObject;
+                m_Lobby1v1Panel = existingCanvas.Find("Lobby1v1Panel")?.gameObject;
                 m_OfflineMapSelectPanel = existingCanvas.Find("OfflineMapSelectPanel")?.gameObject;
-                
+
                 // Tự động tạo nếu chưa được bake
                 if (m_OfflineMapSelectPanel == null) {
                     m_OfflineMapSelectPanel = CreateOfflineMapSelectPanel(existingCanvas);
                 }
+
+                // Lobby1v1Panel là panel ĐỘNG: các handler onClick và tham chiếu widget
+                // (m_CreateRoomButton, m_Lobby1v1Status, m_MapPickFills...) chỉ được nối lúc
+                // CreateLobby1v1Panel chạy. Nếu panel đã bị bake vào scene thì các listener
+                // runtime bị mất -> nút "TẠO PHÒNG MỚI"/"TRỞ VỀ" bấm không phản ứng.
+                // => Luôn xoá bản bake và dựng lại để nối đúng handler + tham chiếu.
+                if (m_Lobby1v1Panel != null) {
+                    Debug.Log("[Lobby1v1][Awake] Phát hiện panel đã bake trong scene -> xoá và dựng lại để nối handler động.");
+                    DestroyImmediate(m_Lobby1v1Panel);
+                    m_Lobby1v1Panel = null;
+                }
+                m_Lobby1v1Panel = CreateLobby1v1Panel(existingCanvas);
+                Debug.Log("[Lobby1v1][Awake] Đã dựng lại Lobby1v1Panel. CreateRoomBtn nối=" + (m_CreateRoomButton != null) + ", StatusRef=" + (m_Lobby1v1Status != null));
 
                 var allButtons = existingCanvas.GetComponentsInChildren<Button>(true);
                 foreach (var btn in allButtons)
@@ -84,6 +99,13 @@ namespace Tanks.Complete
                     vibe.clickSound = m_ClickSound;
 
                     if (btn.transform.parent == null) continue;
+
+                    // Bỏ qua các nút thuộc Lobby1v1Panel: chúng đã được nối handler đúng
+                    // bên trong CreateLobby1v1Panel. Nếu không, dòng "< TRỞ VỀ" bên dưới
+                    // sẽ gắn nhầm nút Trở Về của sảnh 1v1 về Home.
+                    if (m_Lobby1v1Panel != null && btn.transform.IsChildOf(m_Lobby1v1Panel.transform))
+                        continue;
+
                     string parentName = btn.transform.parent.name;
 
                     if (parentName == "PillButton_LEO RANK")
@@ -110,6 +132,11 @@ namespace Tanks.Complete
                     {
                         btn.onClick.RemoveAllListeners();
                         btn.onClick.AddListener(() => UpdateState(MenuState.OfflineMapSelect));
+                    }
+                    else if (parentName == "Card_SOLO ARENA\n(1v1)")
+                    {
+                        btn.onClick.RemoveAllListeners();
+                        btn.onClick.AddListener(() => UpdateState(MenuState.Lobby1v1));
                     }
                     else if (parentName == "MapCard_DESERT")
                     {
@@ -169,6 +196,7 @@ namespace Tanks.Complete
             m_HomePanel = CreateHomePanel(canvasGo.transform);
             m_ModeSelectPanel = CreateModeSelectPanel(canvasGo.transform);
             m_Lobby5v5Panel = CreateLobby5v5Panel(canvasGo.transform);
+            m_Lobby1v1Panel = CreateLobby1v1Panel(canvasGo.transform);
             m_OfflineMapSelectPanel = CreateOfflineMapSelectPanel(canvasGo.transform);
         }
 
@@ -178,12 +206,14 @@ namespace Tanks.Complete
             if (m_HomePanel) m_HomePanel.SetActive(m_CurrentState == MenuState.Home);
             if (m_ModeSelectPanel) m_ModeSelectPanel.SetActive(m_CurrentState == MenuState.ModeSelect);
             if (m_Lobby5v5Panel) m_Lobby5v5Panel.SetActive(m_CurrentState == MenuState.Lobby5v5);
+            if (m_Lobby1v1Panel) m_Lobby1v1Panel.SetActive(m_CurrentState == MenuState.Lobby1v1);
             if (m_OfflineMapSelectPanel) m_OfflineMapSelectPanel.SetActive(m_CurrentState == MenuState.OfflineMapSelect);
 
             AudioClip nextClip = null;
             if (m_CurrentState == MenuState.Home) nextClip = m_MusicHome;
             else if (m_CurrentState == MenuState.ModeSelect) nextClip = m_MusicModeSelect;
             else if (m_CurrentState == MenuState.Lobby5v5) nextClip = m_MusicLobby;
+            else if (m_CurrentState == MenuState.Lobby1v1) nextClip = m_MusicLobby;
 
             if (nextClip != null)
             {
@@ -223,9 +253,11 @@ namespace Tanks.Complete
             m_HomePanel = transform.Find("MainMenuCanvas/HomePanel").gameObject;
             m_ModeSelectPanel = transform.Find("MainMenuCanvas/ModeSelectPanel").gameObject;
             m_Lobby5v5Panel = transform.Find("MainMenuCanvas/Lobby5v5Panel").gameObject;
+            var lobby1v1Panel = transform.Find("MainMenuCanvas/Lobby1v1Panel");
+            if (lobby1v1Panel) m_Lobby1v1Panel = lobby1v1Panel.gameObject;
             var offlinePanel = transform.Find("MainMenuCanvas/OfflineMapSelectPanel");
             if (offlinePanel) m_OfflineMapSelectPanel = offlinePanel.gameObject;
-            
+
             UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(gameObject.scene);
             Debug.Log("Đã nướng (Bake) UI thành công lên Hierarchy và lưu Sprite!");
         }

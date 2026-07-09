@@ -86,9 +86,13 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 0}
     m_Modifications:
+    - target: {fileID: -8135494484627597368, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 3010098044
+      objectReference: {fileID: 0}
     - target: {fileID: 173472, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
       propertyPath: m_Name
-      value: Demo_Tank - Heavy Variant
+      value: Tank - Heavy Variant
       objectReference: {fileID: 0}
     - target: {fileID: 446194, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
       propertyPath: m_LocalPosition.x
@@ -182,5 +186,10 @@ PrefabInstance:
 --- !u!4 &2229267103194764367 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 446194, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
+  m_PrefabInstance: {fileID: 2229267103194913469}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1 &2229267103195021085 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 173472, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
   m_PrefabInstance: {fileID: 2229267103194913469}
   m_PrefabAsset: {fileID: 0}

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading.Tasks;
 using UnityEngine;
 using Unity.Services.Core;
@@ -19,6 +19,13 @@ namespace Tanks.Backend
         public event Action OnInitialized;
         public event Action<string> OnSignInFailed;
         public event Action<string> OnPlayerSignedIn;
+        public event Action<string> OnInitializationFailed;   // Lỗi ở bước khởi tạo UGS (cấu hình / mạng / timeout)
+
+        // Máy trạng thái kết nối để UI phản hồi trực quan
+        public enum ConnectionState { Connecting, Connected, Failed }
+        public ConnectionState State { get; private set; } = ConnectionState.Connecting;
+        public string LastError { get; private set; }
+        private bool m_IsConnecting;
 
         // Trạng thái kiểm tra kết nối và đăng nhập
         public bool IsInitialized => UnityServices.State == ServicesInitializationState.Initialized;
@@ -39,36 +46,91 @@ namespace Tanks.Backend
             }
         }
 
-        private async void Start()
+        private void Start()
         {
-            // Bắt đầu luồng bất đồng bộ (async/await) để kết nối máy chủ UGS ngay khi game chạy
-            await InitializeServicesAsync();
+            // Bắt đầu luồng kết nối máy chủ UGS ngay khi game chạy
+            RetryInitialization();
         }
 
         /// <summary>
-        /// Bước 1: Khởi tạo các dịch vụ cốt lõi của Unity
+        /// Chạy (hoặc chạy lại) toàn bộ tiến trình khởi tạo + đăng nhập.
+        /// Dùng cho nút "Thử lại" trên UI khi kết nối thất bại.
+        /// </summary>
+        public void RetryInitialization()
+        {
+            if (m_IsConnecting) return;   // tránh chạy chồng nhiều lần
+            _ = InitializeServicesAsync();
+        }
+
+        /// <summary>
+        /// Bước 1: Khởi tạo các dịch vụ cốt lõi của Unity (có Timeout + phân loại lỗi)
         /// </summary>
         private async Task InitializeServicesAsync()
         {
+            m_IsConnecting = true;
+            State = ConnectionState.Connecting;
+            LastError = null;
+
             try
             {
+                // Nếu đã khởi tạo + đăng nhập từ trước (ví dụ quay lại menu) thì coi như xong ngay.
+                if (IsInitialized && IsSignedIn)
+                {
+                    State = ConnectionState.Connected;
+                    OnInitialized?.Invoke();
+                    OnPlayerSignedIn?.Invoke(PlayerId);
+                    return;
+                }
+
                 Debug.Log("[UGSManager] Đang khởi tạo Unity Services...");
-                
-                // Hàm này sẽ giao tiếp với Cloud, tải về các cấu hình dự án (Project ID, Environment ID) 
-                // và thiết lập nền tảng cho Auth, Lobby, Relay hoạt động.
-                await UnityServices.InitializeAsync();
-                
-                Debug.Log("[UGSManager] Khởi tạo Unity Services thành công!");
-                
-                // Kích hoạt sự kiện báo cáo hệ thống đã sẵn sàng
+
+                // Thiết lập thời gian chờ tối đa (Timeout) là 8 giây để tránh treo giao diện.
+                var initTask = UnityServices.InitializeAsync();
+                var delayTask = Task.Delay(8000);
+                var completedTask = await Task.WhenAny(initTask, delayTask);
+                if (completedTask == delayTask)
+                {
+                    throw new TimeoutException("Kết nối tới UGS quá thời gian chờ (Timeout). Vui lòng kiểm tra mạng hoặc tắt VPN.");
+                }
+
+                await initTask; // Đợi tác vụ hoàn thành để ném ra lỗi thật sự (nếu có)
+
+                Debug.Log("[UGSManager] Khởi tạo UGS thành công.");
                 OnInitialized?.Invoke();
 
-                // Sau khi UGS Core khởi tạo thành công, tiến hành Đăng nhập ẩn danh mặc định để định danh thiết bị
-                await SignInAnonymouslyAsync();
+                // Kiểm tra xem đã có phiên đăng nhập cũ chưa
+                if (AuthenticationService.Instance.IsSignedIn)
+                {
+                    State = ConnectionState.Connected;
+                    Debug.Log($"[UGSManager] Phát hiện phiên đăng nhập cũ hoạt động. Player ID: {AuthenticationService.Instance.PlayerId}");
+                    OnPlayerSignedIn?.Invoke(AuthenticationService.Instance.PlayerId);
+                }
+                else
+                {
+                    // Chỉ tự động đăng nhập ẩn danh khi KHÔNG ở scene Start (để người dùng nhập Username/Password)
+                    if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name != "Start")
+                    {
+                        await SignInAnonymouslyAsync();
+                    }
+                }
             }
-            catch (Exception e)
+            catch (ServicesInitializationException ex)
             {
-                Debug.LogError($"[UGSManager] Lỗi khởi tạo Unity Services: {e.Message}");
+                LastError = $"Lỗi cấu hình UGS: {ex.Message}. Hãy đảm bảo Project đã được liên kết trong Project Settings -> Services.";
+                State = ConnectionState.Failed;
+                Debug.LogError($"[UGSManager] {LastError}");
+                OnInitializationFailed?.Invoke(LastError);
+            }
+            catch (Exception ex)
+            {
+                LastError = $"Lỗi kết nối mạng: {ex.Message}";
+                State = ConnectionState.Failed;
+                Debug.LogError($"[UGSManager] {LastError}");
+                OnInitializationFailed?.Invoke(LastError);
+            }
+            finally
+            {
+                m_IsConnecting = false;
             }
         }
 
@@ -86,17 +148,22 @@ namespace Tanks.Backend
                 // 2. Nếu chưa có, gửi Device ID lên Unity Cloud để xin cấp 1 tài khoản ẩn danh mới.
                 // 3. Unity Cloud trả về Access Token (JWT) và lưu trữ cục bộ (mã hóa) trên thiết bị.
                 await AuthenticationService.Instance.SignInAnonymouslyAsync();
-                
+
+                State = ConnectionState.Connected;
                 Debug.Log($"[UGSManager] Đăng nhập thành công! Player ID: {AuthenticationService.Instance.PlayerId}");
                 OnPlayerSignedIn?.Invoke(AuthenticationService.Instance.PlayerId);
             }
             catch (AuthenticationException authException)
             {
+                LastError = authException.Message;
+                State = ConnectionState.Failed;
                 Debug.LogError($"[UGSManager] Đăng nhập thất bại (Lỗi nghiệp vụ Auth): {authException.Message}");
                 OnSignInFailed?.Invoke(authException.Message);
             }
             catch (Exception e)
             {
+                LastError = e.Message;
+                State = ConnectionState.Failed;
                 Debug.LogError($"[UGSManager] Đăng nhập thất bại (Lỗi kết nối mạng): {e.Message}");
                 OnSignInFailed?.Invoke(e.Message);
             }

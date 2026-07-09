@@ -19,6 +19,8 @@ namespace Tanks.Backend
         public ISession CurrentSession { get; private set; }
         public bool IsInSession => CurrentSession != null;
 
+        private bool m_IsBusy;   // Chặn gọi chồng Create/Join khi một tác vụ đang chạy
+
         private void Awake()
         {
             if (Instance == null)
@@ -35,18 +37,30 @@ namespace Tanks.Backend
         /// <summary>
         /// Tạo một phòng chờ mới (Host) tích hợp sẵn Unity Relay
         /// </summary>
-        public async Task CreateLobbyAsync(string sessionName, int maxPlayers = 4)
+        public async Task CreateLobbyAsync(string sessionName, int maxPlayers = 2)
         {
-            if (!UGSManager.Instance.IsSignedIn)
+            // Chặn re-entrancy: đang có tác vụ tạo/vào phòng dở dang
+            if (m_IsBusy) return;
+
+            // Đã ở trong một phòng thì không tạo đè (tránh bỏ rơi host cũ)
+            if (IsInSession)
+            {
+                OnSessionError?.Invoke("Bạn đang ở trong một phòng khác. Hãy rời phòng trước.");
+                return;
+            }
+
+            // Kiểm tra đăng nhập an toàn (tránh NRE khi thiếu UGSManager)
+            if (UGSManager.Instance == null || !UGSManager.Instance.IsSignedIn)
             {
                 OnSessionError?.Invoke("Bạn cần đăng nhập UGS trước khi tạo phòng!");
                 return;
             }
 
+            m_IsBusy = true;
             try
             {
                 Debug.Log($"[NetworkLobbyManager] Đang tạo session: {sessionName}...");
-                
+
                 // Thiết lập SessionOptions cấu hình sử dụng Relay và giới hạn số người chơi
                 var options = new SessionOptions
                 {
@@ -58,13 +72,17 @@ namespace Tanks.Backend
                 CurrentSession = await MultiplayerService.Instance.CreateSessionAsync(options);
 
                 Debug.Log($"[NetworkLobbyManager] Tạo phòng thành công! Session ID: {CurrentSession.Id}, Join Code: {CurrentSession.Code}");
-                
+
                 OnSessionCreated?.Invoke(CurrentSession);
             }
             catch (Exception e)
             {
                 Debug.LogError($"[NetworkLobbyManager] Lỗi khi tạo phòng: {e.Message}");
                 OnSessionError?.Invoke(e.Message);
+            }
+            finally
+            {
+                m_IsBusy = false;
             }
         }
 
@@ -116,9 +134,10 @@ namespace Tanks.Backend
                 await CurrentSession.LeaveAsync();
                 
                 // Tắt kết nối Netcode nếu đang chạy
-                if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsClient)
+                if (NetworkManager.Singleton != null)
                 {
                     NetworkManager.Singleton.Shutdown();
+                    Debug.Log("[NetworkLobbyManager] Đã dừng Netcode.");
                 }
 
                 CurrentSession = null;

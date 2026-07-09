@@ -1,12 +1,15 @@
 using System.Collections;
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using Unity.Netcode;
+using Unity.Collections;
 using UnityEngine.SceneManagement;
 using UnityEngine.Serialization;
 
 namespace Tanks.Complete
 {
-    public class GameManager : MonoBehaviour
+    public class GameManager : NetworkBehaviour
     {
         // Which state the game is currently in
         public enum GameState
@@ -38,6 +41,65 @@ namespace Tanks.Complete
         [FormerlySerializedAs("m_Tanks")] 
         public TankManager[] m_SpawnPoints;         // A collection of managers for enabling and disabling different aspects of the tanks.
         
+        public NetworkVariable<bool> m_IsControlEnabled = new NetworkVariable<bool>(false);
+        public NetworkVariable<FixedString128Bytes> m_TitleTextSync = new NetworkVariable<FixedString128Bytes>("");
+        private bool m_GameLoopStarted = false;
+
+        // [ONLINE] Lựa chọn tank của từng máy (clientId -> chỉ số prefab 0..3).
+        // Mỗi máy chỉ chọn xe của riêng mình rồi gửi lên server qua SubmitTankChoiceRpc.
+        private readonly Dictionary<ulong, int> m_ClientTankChoice = new Dictionary<ulong, int>();
+
+        public override void OnNetworkSpawn()
+        {
+            m_IsControlEnabled.OnValueChanged += OnControlEnabledChanged;
+            m_TitleTextSync.OnValueChanged += OnTitleTextChanged;
+            
+            OnControlEnabledChanged(false, m_IsControlEnabled.Value);
+            OnTitleTextChanged("", m_TitleTextSync.Value);
+        }
+
+        public override void OnDestroy()
+        {
+            base.OnDestroy();
+            m_IsControlEnabled.OnValueChanged -= OnControlEnabledChanged;
+            m_TitleTextSync.OnValueChanged -= OnTitleTextChanged;
+        }
+
+        private void OnControlEnabledChanged(bool oldVal, bool newVal)
+        {
+            for (int i = 0; i < m_SpawnPoints.Length; i++)
+            {
+                if (m_SpawnPoints[i].m_Instance != null)
+                {
+                    if (newVal)
+                        m_SpawnPoints[i].EnableControl();
+                    else
+                        m_SpawnPoints[i].DisableControl();
+                }
+            }
+        }
+
+        private void OnTitleTextChanged(FixedString128Bytes oldVal, FixedString128Bytes newVal)
+        {
+            if (m_TitleText != null)
+            {
+                m_TitleText.text = newVal.ToString();
+            }
+        }
+
+        private void SetTitleText(string text)
+        {
+            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
+            {
+                if (m_TitleText != null) m_TitleText.text = text;
+                return;
+            }
+
+            if (IsServer)
+            {
+                m_TitleTextSync.Value = text;
+            }
+        }
         private GameState m_CurrentState;
         
         private int m_RoundNumber;                  // Which round the game is currently on.
@@ -66,7 +128,11 @@ namespace Tanks.Complete
             }
 
             m_TitleText = textRef.Text;
-            m_TitleText.text = "";
+            SetTitleText("");
+            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
+            {
+                GameStart();
+            }
 
             // The GameManager require 4 tanks prefabs, as the start menu have 4 fixed slot and need the 4 tanks to show there
             if (m_Tank1Prefab == null || m_Tank2Prefab == null || m_Tank3Prefab == null || m_Tank4Prefab == null)
@@ -77,14 +143,12 @@ namespace Tanks.Complete
 
         void GameStart()
         {
-            // Create the delays so they only have to be made once.
             m_StartWait = new WaitForSeconds (m_StartDelay);
             m_EndWait = new WaitForSeconds (m_EndDelay);
 
             SpawnAllTanks();
             SetCameraTargets();
 
-            // Once the tanks have been created and the camera is using them as targets, start the game.
             StartCoroutine (GameLoop ());
         }
 
@@ -108,36 +172,141 @@ namespace Tanks.Complete
             ChangeGameState(GameState.Game);
         }
 
+        // =====================================================================
+        //  [ONLINE] Mỗi máy tự chọn tank riêng
+        // =====================================================================
+
+        // Client gọi hàm này (RPC gửi tới server) để báo mình chọn xe nào.
+        // rpcParams cho biết clientId của người gửi.
+        [Rpc(SendTo.Server)]
+        public void SubmitTankChoiceRpc(int tankIndex, RpcParams rpcParams = default)
+        {
+            ulong senderId = rpcParams.Receive.SenderClientId;
+            m_ClientTankChoice[senderId] = Mathf.Clamp(tankIndex, 0, 3);
+            int chosen = m_ClientTankChoice.Count;
+            int needed = NetworkManager.Singleton != null ? NetworkManager.Singleton.ConnectedClientsList.Count : 0;
+            Debug.Log($"[GameManager] Client {senderId} chọn tank index {tankIndex}. Đã chọn {chosen}/{needed}.");
+        }
+
+        // Đủ người kết nối và tất cả đều đã gửi lựa chọn xe.
+        private bool AllPlayersChosenTank()
+        {
+            var nm = NetworkManager.Singleton;
+            if (nm == null) return false;
+
+            var clients = nm.ConnectedClientsList;
+            if (clients.Count < 2) return false;   // 1v1 cần đủ 2 người
+
+            for (int i = 0; i < clients.Count; i++)
+            {
+                if (!m_ClientTankChoice.ContainsKey(clients[i].ClientId))
+                    return false;
+            }
+            return true;
+        }
+
+        // Ánh xạ chỉ số lựa chọn (0..3) sang prefab tank tương ứng của menu.
+        private GameObject GetTankPrefabByIndex(int index)
+        {
+            switch (index)
+            {
+                case 1: return m_Tank2Prefab;
+                case 2: return m_Tank3Prefab;
+                case 3: return m_Tank4Prefab;
+                default: return m_Tank1Prefab;
+            }
+        }
+
+
+        private void Update()
+        {
+            if (IsServer)
+            {
+                // Chỉ bắt đầu khi ĐỦ người VÀ mọi máy đã chọn xong xe của mình.
+                if (!m_GameLoopStarted && AllPlayersChosenTank())
+                {
+                    m_GameLoopStarted = true;
+                    Debug.Log("[GameManager] Tất cả người chơi đã chọn xe -> bắt đầu spawn.");
+                    GameStart();
+                }
+            }
+            else if (IsClient)
+            {
+                var networkObjects = FindObjectsByType<NetworkObject>(FindObjectsInactive.Exclude);
+                foreach (var netObj in networkObjects)
+                {
+                    if (netObj.gameObject.name.Contains("Tank"))
+                    {
+                        ulong ownerId = netObj.OwnerClientId;
+                        int slot = (ownerId == 0) ? 0 : 1;
+                        if (slot < m_SpawnPoints.Length && m_SpawnPoints[slot].m_Instance == null)
+                        {
+                            m_SpawnPoints[slot].m_Instance = netObj.gameObject;
+                            m_SpawnPoints[slot].m_PlayerNumber = slot + 1;
+                            m_SpawnPoints[slot].Setup(this);
+                            
+                            // Make sure the newly discovered tank obeys the current control state
+                            if (m_IsControlEnabled.Value)
+                                m_SpawnPoints[slot].EnableControl();
+                            else
+                                m_SpawnPoints[slot].DisableControl();
+
+                            SetCameraTargets();
+                        }
+                    }
+                }
+            }
+        }
 
         private void SpawnAllTanks()
         {
-            // For all the tanks...
-            for (int i = 0; i < m_PlayerCount; i++)
+            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
             {
-                var playerData = m_TankData[i];
-                
-                // ... create them, set their player number and references needed for control.
-                m_SpawnPoints[i].m_Instance =
-                    Instantiate(playerData.UsedPrefab, m_SpawnPoints[i].m_SpawnPoint.position, m_SpawnPoints[i].m_SpawnPoint.rotation) as GameObject;
+                m_PlayerCount = m_SpawnPoints.Length;
+                for (int i = 0; i < m_PlayerCount; i++)
+                {
+                    GameObject tankPrefab = (i == 0) ? m_Tank1Prefab : m_Tank2Prefab;
+                    GameObject tankInstance = Instantiate(tankPrefab, m_SpawnPoints[i].m_SpawnPoint.position, m_SpawnPoints[i].m_SpawnPoint.rotation);
 
-                //this guard against possible user error : if they created a prefab with Is Computer Control set to true
-                //then all of those prefab would be bots. So we ensure it's to false (the IsComputer from player data
-                //will re-enable this if needed when the game start)
-                var mov = m_SpawnPoints[i].m_Instance.GetComponent<TankMovement>();
-                mov.m_IsComputerControlled = false;
-                
-                m_SpawnPoints[i].m_PlayerNumber = i + 1;
-                m_SpawnPoints[i].ControlIndex = playerData.ControlIndex;
-                m_SpawnPoints[i].m_PlayerColor = playerData.TankColor;
-                m_SpawnPoints[i].m_ComputerControlled = playerData.IsComputer;
+                    m_SpawnPoints[i].m_Instance = tankInstance;
+                    m_SpawnPoints[i].m_PlayerNumber = i + 1;
+                    m_SpawnPoints[i].ControlIndex = (i == 0) ? 1 : 2;
+                    m_SpawnPoints[i].m_ComputerControlled = (i > 0);
+                }
+
+                foreach (var tank in m_SpawnPoints)
+                {
+                    if (tank.m_Instance == null) continue;
+                    tank.Setup(this);
+                }
+                return;
             }
 
-            //we delayed setup after all tanks are created as they expect to have access to all other tanks in the manager
+            if (!IsServer) return;
+
+            var clients = NetworkManager.Singleton.ConnectedClientsList;
+            m_PlayerCount = Mathf.Min(clients.Count, m_SpawnPoints.Length);
+
+            for (int i = 0; i < m_PlayerCount; i++)
+            {
+                ulong clientId = clients[i].ClientId;
+                // Dùng xe mà chính máy đó đã chọn; nếu thiếu (fallback) thì theo thứ tự slot.
+                int choice = m_ClientTankChoice.TryGetValue(clientId, out var picked) ? picked : i;
+                GameObject tankPrefab = GetTankPrefabByIndex(choice);
+                Debug.Log($"[GameManager] Spawn tank cho client {clientId} bằng prefab '{tankPrefab.name}' (index {choice}).");
+
+                GameObject tankInstance = Instantiate(tankPrefab, m_SpawnPoints[i].m_SpawnPoint.position, m_SpawnPoints[i].m_SpawnPoint.rotation);
+                tankInstance.GetComponent<NetworkObject>().SpawnWithOwnership(clientId);
+
+                m_SpawnPoints[i].m_Instance = tankInstance;
+                m_SpawnPoints[i].m_PlayerNumber = i + 1;
+                m_SpawnPoints[i].ControlIndex = -1;
+                m_SpawnPoints[i].m_ComputerControlled = false;
+            }
+
             foreach (var tank in m_SpawnPoints)
             {
-                if(tank.m_Instance == null)
-                    continue;
-                
+                if (tank.m_Instance == null) continue;
                 tank.Setup(this);
             }
         }
@@ -145,17 +314,22 @@ namespace Tanks.Complete
 
         private void SetCameraTargets()
         {
-            // Create a collection of transforms the same size as the number of tanks.
-            Transform[] targets = new Transform[m_PlayerCount];
-
-            // For each of these transforms...
-            for (int i = 0; i < targets.Length; i++)
+            int count = 0;
+            for (int i = 0; i < m_SpawnPoints.Length; i++)
             {
-                // ... set it to the appropriate tank transform.
-                targets[i] = m_SpawnPoints[i].m_Instance.transform;
+                if (m_SpawnPoints[i].m_Instance != null) count++;
             }
 
-            // These are the targets the camera should follow.
+            Transform[] targets = new Transform[count];
+            int index = 0;
+            for (int i = 0; i < m_SpawnPoints.Length; i++)
+            {
+                if (m_SpawnPoints[i].m_Instance != null)
+                {
+                    targets[index++] = m_SpawnPoints[i].m_Instance.transform;
+                }
+            }
+
             m_CameraControl.m_Targets = targets;
         }
 
@@ -199,7 +373,7 @@ namespace Tanks.Complete
 
             // Increment the round number and display text showing the players what round it is.
             m_RoundNumber++;
-            m_TitleText.text = "ROUND " + m_RoundNumber;
+            SetTitleText("ROUND " + m_RoundNumber);
 
             // Wait for the specified length of time until yielding control back to the game loop.
             yield return m_StartWait;
@@ -212,7 +386,11 @@ namespace Tanks.Complete
             EnableTankControl ();
 
             // Clear the text from the screen.
-            m_TitleText.text = string.Empty;
+            SetTitleText("");
+            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
+            {
+                GameStart();
+            }
 
             // While there is not one tank left...
             while (!OneTankLeft())
@@ -243,7 +421,7 @@ namespace Tanks.Complete
 
             // Get a message based on the scores and whether or not there is a game winner and display it.
             string message = EndMessage ();
-            m_TitleText.text = message;
+            SetTitleText(message);
 
             // Wait for the specified length of time until yielding control back to the game loop.
             yield return m_EndWait;
@@ -335,24 +513,77 @@ namespace Tanks.Complete
             for (int i = 0; i < m_PlayerCount; i++)
             {
                 m_SpawnPoints[i].Reset();
+                
+                if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+                {
+                    var netObj = m_SpawnPoints[i].m_Instance.GetComponent<NetworkObject>();
+                    if (netObj != null && netObj.IsSpawned)
+                    {
+                        ResetTankClientRpc(netObj.NetworkObjectId, m_SpawnPoints[i].m_SpawnPoint.position, m_SpawnPoints[i].m_SpawnPoint.rotation);
+                    }
+                }
+            }
+        }
+
+        [ClientRpc]
+        private void ResetTankClientRpc(ulong networkObjectId, Vector3 position, Quaternion rotation)
+        {
+            if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(networkObjectId, out var netObj))
+            {
+                if (netObj.IsOwner)
+                {
+                    netObj.transform.position = position;
+                    netObj.transform.rotation = rotation;
+                    
+                    var rb = netObj.GetComponent<Rigidbody>();
+                    if (rb != null)
+                    {
+                        rb.linearVelocity = Vector3.zero;
+                        rb.angularVelocity = Vector3.zero;
+                    }
+                }
+                
+                // SetActive does not automatically sync across the network for NetworkObjects
+                // so we must explicitly enable it on all clients when resetting.
+                netObj.gameObject.SetActive(false);
+                netObj.gameObject.SetActive(true);
             }
         }
 
 
         private void EnableTankControl()
         {
-            for (int i = 0; i < m_PlayerCount; i++)
+            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
             {
-                m_SpawnPoints[i].EnableControl();
+                for (int i = 0; i < m_SpawnPoints.Length; i++)
+                {
+                    if (m_SpawnPoints[i].m_Instance != null)
+                        m_SpawnPoints[i].EnableControl();
+                }
+                return;
+            }
+
+            if (IsServer)
+            {
+                m_IsControlEnabled.Value = true;
             }
         }
 
-
         private void DisableTankControl()
         {
-            for (int i = 0; i < m_PlayerCount; i++)
+            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
             {
-                m_SpawnPoints[i].DisableControl();
+                for (int i = 0; i < m_SpawnPoints.Length; i++)
+                {
+                    if (m_SpawnPoints[i].m_Instance != null)
+                        m_SpawnPoints[i].DisableControl();
+                }
+                return;
+            }
+
+            if (IsServer)
+            {
+                m_IsControlEnabled.Value = false;
             }
         }
     }

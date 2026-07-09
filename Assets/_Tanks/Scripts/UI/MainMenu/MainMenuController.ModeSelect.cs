@@ -37,7 +37,7 @@ namespace Tanks.Complete
             var cardOffline = CreateModeCard(modesGroup, "OFFLINE\nBOTS", "Luyện Tập", m_CyanColor, () => Debug.Log("Vào chế độ Offline..."));
             cardOffline.GetComponent<RectTransform>().anchoredPosition = new Vector2(-450, 0);
 
-            var card1 = CreateModeCard(modesGroup, "SOLO ARENA\n(1v1)", "Đấu Trường Sa Mạc", m_CardColor1, () => Debug.Log("Tạo sảnh 1v1..."));
+            var card1 = CreateModeCard(modesGroup, "SOLO ARENA\n(1v1)", "Đấu Trường Sa Mạc", m_CardColor1, () => UpdateState(MenuState.Lobby1v1));
             card1.GetComponent<RectTransform>().anchoredPosition = new Vector2(0, 0);
 
             var card2 = CreateModeCard(modesGroup, "TEAM COMBAT\n(5v5)", "Bản Đồ Chiến Lược", m_CardColor2, () => UpdateState(MenuState.Lobby5v5));

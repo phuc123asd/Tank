@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using TMPro;
+using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.OnScreen;
@@ -28,8 +29,13 @@ namespace Tanks.Complete
 
         private PauseMenu m_PauseMenu;                  // Reference to the pause menu (if present in the scene)
         private InputAction m_PauseAction;              // The InputAction that will trigger the pause menu
-        
+
         private CanvasScaler m_CanvasScaler;
+
+        // [ONLINE] Ở chế độ mạng, mỗi máy chỉ chọn 1 xe của riêng mình (không gán P1/P2/Máy).
+        private bool m_Networked;                       // Có đang chạy Netcode không
+        private int m_NetSelectedIndex = -1;            // Chỉ số xe máy này đang chọn (chưa xác nhận)
+        private bool m_NetWaitingForSpawn;              // Đã bấm SẴN SÀNG, đang chờ server spawn xe
 
         private void Awake()
         {
@@ -53,13 +59,16 @@ namespace Tanks.Complete
             if (MobileUIControl.Instance != null)
                 MobileUIControl.Instance.Hide();
 
+            // [ONLINE] Nếu đang chạy Netcode -> dùng chế độ chọn 1 xe cho mỗi máy.
+            m_Networked = NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening;
+
             // Setup the Start button to StartGame when clicked
-            m_StartButton.onClick.AddListener(StartGame);
+            m_StartButton.onClick.AddListener(m_Networked ? (UnityEngine.Events.UnityAction)StartGameNetworked : StartGame);
             // but disable it until we have at least 2 tank selected
             m_StartButton.interactable = false;
             m_StartButtonText = m_StartButton.GetComponentInChildren<TextMeshProUGUI>();
-            m_StartButtonText.text = "2 Tanks required";
-            
+            m_StartButtonText.text = m_Networked ? "CHỌN 1 XE TĂNG" : "2 Tanks required";
+
             // Disable the on screen pause button
             m_PauseMenuButton.gameObject.SetActive(false);
 
@@ -84,6 +93,13 @@ namespace Tanks.Complete
                     m_GameManager.m_Tank1Prefab, m_GameManager.m_Tank2Prefab, m_GameManager.m_Tank3Prefab,
                     m_GameManager.m_Tank4Prefab
                 };
+
+            // [ONLINE] Chế độ mạng: mỗi máy chỉ chọn 1 xe của mình, không có P1/P2/Máy.
+            if (m_Networked)
+            {
+                SetupNetworkedSelection(tanksPrefabs);
+                return;
+            }
 
             // Go over all the player slots (4) and initialize them...
             for (int i = 0; i < m_PlayerSlots.Length; ++i)
@@ -234,12 +250,103 @@ namespace Tanks.Complete
             m_PauseMenu.TogglePause();
         }
 
+        // =====================================================================
+        //  [ONLINE] Chọn 1 xe cho mỗi máy
+        // =====================================================================
+
+        // Khởi tạo màn chọn xe cho chế độ mạng: hiện 4 xe, nhấn 1 xe để chọn, nút Start = "SẴN SÀNG".
+        private void SetupNetworkedSelection(GameObject[] tanksPrefabs)
+        {
+            for (int i = 0; i < m_PlayerSlots.Length; ++i)
+            {
+                var slot = m_PlayerSlots[i];
+                slot.SetTankPreview(tanksPrefabs.Length > i ? tanksPrefabs[i] : tanksPrefabs[0]);
+
+                // Ẩn cụm nút P1/P2/Máy — mỗi máy chỉ điều khiển 1 xe của chính mình.
+                slot.m_ControlChoiceRoot.gameObject.SetActive(false);
+
+                int idx = i;
+                slot.m_AddControlButton.onClick.RemoveAllListeners();
+                slot.m_AddControlButton.onClick.AddListener(() => SelectNetworkTank(idx));
+            }
+
+            Debug.Log("[GameUIHandler] Chế độ MẠNG: mỗi máy chọn 1 xe riêng.");
+        }
+
+        // Máy này chọn 1 xe (chưa xác nhận). Đánh dấu xe đang chọn và mở nút SẴN SÀNG.
+        private void SelectNetworkTank(int index)
+        {
+            m_NetSelectedIndex = index;
+            for (int i = 0; i < m_PlayerSlots.Length; ++i)
+            {
+                var slot = m_PlayerSlots[i];
+                bool selected = i == index;
+                slot.BackgroundImage.sprite = selected ? slot.UsedSlotBackground : slot.OpenSlotBackground;
+            }
+
+            m_StartButton.interactable = true;
+            m_StartButtonText.text = "SẴN SÀNG";
+            Debug.Log($"[GameUIHandler] Máy này đang chọn xe index {index} (bấm SẴN SÀNG để xác nhận).");
+        }
+
+        // Xác nhận lựa chọn: gửi lên server và chuyển sang trạng thái chờ đối thủ.
+        private void StartGameNetworked()
+        {
+            if (m_NetSelectedIndex < 0) return;
+
+            Debug.Log($"[GameUIHandler] Gửi lựa chọn xe index {m_NetSelectedIndex} lên server.");
+            m_GameManager.SubmitTankChoiceRpc(m_NetSelectedIndex);
+
+            m_NetWaitingForSpawn = true;
+            m_StartButton.interactable = false;
+            m_StartButtonText.text = "ĐANG CHỜ ĐỐI THỦ...";
+            foreach (var slot in m_PlayerSlots)
+                slot.m_AddControlButton.interactable = false;   // khoá không cho đổi xe nữa
+        }
+
+        // Khi server đã spawn xe (GameManager gán m_Instance), ẩn menu và vào trận.
+        private void FinishNetworkedStart()
+        {
+            m_NetWaitingForSpawn = false;
+            m_StartMenuRoot.gameObject.SetActive(false);
+
+            foreach (var slot in m_PlayerSlots)
+                if (slot.TankPreview != null) Destroy(slot.TankPreview);
+
+            if (MobileUIControl.Instance != null)
+                MobileUIControl.Instance.Show();
+
+            if (m_PauseMenu != null)
+            {
+                m_PauseAction.performed += evt => { TogglePause(); };
+                m_PauseAction.Enable();
+                m_PauseMenuButton.gameObject.SetActive(true);
+            }
+
+            Debug.Log("[GameUIHandler] Xe đã spawn -> ẩn menu chọn xe, vào trận.");
+        }
+
+        // Kiểm tra server đã spawn xe cho trận này chưa (dùng cho chế độ mạng).
+        private bool AnyTankSpawned()
+        {
+            if (m_GameManager == null || m_GameManager.m_SpawnPoints == null) return false;
+            foreach (var sp in m_GameManager.m_SpawnPoints)
+                if (sp != null && sp.m_Instance != null) return true;
+            return false;
+        }
+
         private void Update()
         {
             // This help keeping the UI readable in both portrait and landscape mode (game should only be played in landscape
             // but Unity Play cannot enforce an orientation so we need it to be readable even in portrait)
             float ratio = Screen.width / (float)Screen.height;
             m_CanvasScaler.matchWidthOrHeight = ratio > 1.0f ? 1.0f : 0.0f;
+
+            // [ONLINE] Sau khi bấm SẴN SÀNG, chờ tới khi server spawn xe rồi mới ẩn menu vào trận.
+            if (m_NetWaitingForSpawn && AnyTankSpawned())
+            {
+                FinishNetworkedStart();
+            }
         }
     }
 }
