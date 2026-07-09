@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using Unity.Netcode;
@@ -98,6 +99,7 @@ namespace Tanks.Complete
             if (m_Networked)
             {
                 SetupNetworkedSelection(tanksPrefabs);
+                StartCoroutine(WaitForNetworkGameManager());
                 return;
             }
 
@@ -284,7 +286,7 @@ namespace Tanks.Complete
                 slot.BackgroundImage.sprite = selected ? slot.UsedSlotBackground : slot.OpenSlotBackground;
             }
 
-            m_StartButton.interactable = true;
+            m_StartButton.interactable = IsNetworkGameManagerReady();
             m_StartButtonText.text = "SẴN SÀNG";
             Debug.Log($"[GameUIHandler] Máy này đang chọn xe index {index} (bấm SẴN SÀNG để xác nhận).");
         }
@@ -294,6 +296,15 @@ namespace Tanks.Complete
         {
             if (m_NetSelectedIndex < 0) return;
 
+            if (!IsNetworkGameManagerReady())
+            {
+                m_StartButton.interactable = false;
+                m_StartButtonText.text = "ĐANG ĐỒNG BỘ...";
+                StartCoroutine(WaitForNetworkGameManager());
+                Debug.LogWarning("[GameUIHandler] GameManager chưa được Network Spawn. Tạm hoãn gửi lựa chọn.");
+                return;
+            }
+
             Debug.Log($"[GameUIHandler] Gửi lựa chọn xe index {m_NetSelectedIndex} lên server.");
             m_GameManager.SubmitTankChoiceRpc(m_NetSelectedIndex);
 
@@ -302,6 +313,29 @@ namespace Tanks.Complete
             m_StartButtonText.text = "ĐANG CHỜ ĐỐI THỦ...";
             foreach (var slot in m_PlayerSlots)
                 slot.m_AddControlButton.interactable = false;   // khoá không cho đổi xe nữa
+        }
+
+        private bool IsNetworkGameManagerReady()
+        {
+            if (m_GameManager == null || !m_GameManager.IsSpawned)
+                m_GameManager = FindAnyObjectByType<GameManager>();
+
+            return m_GameManager != null &&
+                   m_GameManager.IsSpawned &&
+                   NetworkManager.Singleton != null &&
+                   NetworkManager.Singleton.IsListening;
+        }
+
+        private IEnumerator WaitForNetworkGameManager()
+        {
+            while (m_Networked && !IsNetworkGameManagerReady())
+                yield return null;
+
+            if (!m_Networked || m_NetWaitingForSpawn)
+                yield break;
+
+            m_StartButton.interactable = m_NetSelectedIndex >= 0;
+            m_StartButtonText.text = m_NetSelectedIndex >= 0 ? "SẴN SÀNG" : "CHỌN 1 XE TĂNG";
         }
 
         // Khi server đã spawn xe (GameManager gán m_Instance), ẩn menu và vào trận.

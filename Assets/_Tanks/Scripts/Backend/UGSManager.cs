@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Threading.Tasks;
 using UnityEngine;
 using Unity.Services.Core;
@@ -52,6 +52,38 @@ namespace Tanks.Backend
             RetryInitialization();
         }
 
+        public void SignOutAndReturnToLogin()
+        {
+            ClearAuthenticationSession();
+            UnityEngine.SceneManagement.SceneManager.LoadScene("Start");
+        }
+
+        private void OnApplicationQuit()
+        {
+            ClearAuthenticationSession();
+        }
+
+        private static void ClearAuthenticationSession()
+        {
+            if (UnityServices.State != ServicesInitializationState.Initialized)
+                return;
+
+            try
+            {
+                var authService = AuthenticationService.Instance;
+                if (authService.IsSignedIn)
+                    authService.SignOut(true);
+                else if (authService.SessionTokenExists)
+                    authService.ClearSessionToken();
+
+                Debug.Log("[UGSManager] Đã xoá hoàn toàn phiên đăng nhập trên thiết bị.");
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"[UGSManager] Không thể xoá phiên đăng nhập: {exception.Message}");
+            }
+        }
+
         /// <summary>
         /// Chạy (hoặc chạy lại) toàn bộ tiến trình khởi tạo + đăng nhập.
         /// Dùng cho nút "Thử lại" trên UI khi kết nối thất bại.
@@ -84,8 +116,17 @@ namespace Tanks.Backend
 
                 Debug.Log("[UGSManager] Đang khởi tạo Unity Services...");
 
+                var options = new Unity.Services.Core.InitializationOptions();
+                
+                // Cố định Profile riêng biệt cho Editor và Build để tránh đụng độ bộ nhớ cache cục bộ (SQLite) khi chạy trên cùng 1 máy tính.
+#if UNITY_EDITOR
+                options.SetProfile("editor_profile");
+#else
+                options.SetProfile("build_profile");
+#endif
+
                 // Thiết lập thời gian chờ tối đa (Timeout) là 8 giây để tránh treo giao diện.
-                var initTask = UnityServices.InitializeAsync();
+                var initTask = UnityServices.InitializeAsync(options);
                 var delayTask = Task.Delay(8000);
                 var completedTask = await Task.WhenAny(initTask, delayTask);
                 if (completedTask == delayTask)

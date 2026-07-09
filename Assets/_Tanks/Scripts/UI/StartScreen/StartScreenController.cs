@@ -1,4 +1,4 @@
-﻿using TMPro;
+using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem.UI;
@@ -194,8 +194,10 @@ namespace Tanks.Complete
         {
             if (m_Loading) return;
 
-            string username = m_UsernameField.text.Trim();
-            string password = m_PasswordField.text.Trim();
+            // Xoá \u200B vì TextMeshPro trong Editor thường tự động nhét ký tự vô hình này vào cuối chuỗi text
+            string username = m_UsernameField.text.Replace("\u200B", "").Trim();
+            // Xoá khoảng trắng vô hình của TextMeshPro và các ký tự xuống dòng (nếu có khi copy/paste hoặc bấm Enter)
+            string password = m_PasswordField.text.Replace("\u200B", "").Trim('\r', '\n');
 
             if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
             {
@@ -205,7 +207,7 @@ namespace Tanks.Complete
 
             if (m_CurrentState == UIState.Register)
             {
-                string confirmPassword = m_ConfirmPasswordField.text.Trim();
+                string confirmPassword = m_ConfirmPasswordField.text.Replace("\u200B", "").Trim('\r', '\n');
                 if (password != confirmPassword)
                 {
                     Debug.LogError("[Auth] Lỗi: Mật khẩu xác nhận không trùng khớp.");
@@ -222,9 +224,19 @@ namespace Tanks.Complete
                 Debug.Log("[Auth] Bước 1/4: Kiểm tra trạng thái phiên đăng nhập cũ...");
                 if (authService.IsSignedIn)
                 {
-                    Debug.Log($"[Auth] Phát hiện người chơi đã đăng nhập trước đó (Player ID: {authService.PlayerId}). Đang đăng xuất...");
-                    authService.SignOut();
+                    Debug.Log($"[Auth] Phát hiện phiên cũ của Player ID {authService.PlayerId}. Đang xoá hoàn toàn...");
+                    authService.SignOut(true);
                 }
+
+                // Use one temporary profile while the game is open. Credentials are
+                // removed on logout/quit, so the next launch can use any account.
+                if (authService.Profile != "default")
+                {
+                    authService.SwitchProfile("default");
+                    Debug.Log("[Auth] Đã trở về hồ sơ đăng nhập mặc định.");
+                }
+                if (authService.SessionTokenExists)
+                    authService.ClearSessionToken();
 
                 if (m_CurrentState == UIState.Login)
                 {
@@ -235,6 +247,20 @@ namespace Tanks.Complete
                 {
                     Debug.Log($"[Auth] Bước 2/4: Đăng ký tài khoản: '{username}'...");
                     await authService.SignUpWithUsernamePasswordAsync(username, password);
+
+                    string registeredPlayerId = authService.PlayerId;
+                    Debug.Log($"[Auth] Đăng ký thành công Player ID: {registeredPlayerId}. Đang xác minh đăng nhập lại...");
+
+                    // Do not trust only the cached session created during sign-up.
+                    // Verify that the new credentials can really authenticate again.
+                    authService.SignOut(true);
+                    await authService.SignInWithUsernamePasswordAsync(username, password);
+
+                    if (authService.PlayerId != registeredPlayerId)
+                        throw new System.InvalidOperationException(
+                            "Tài khoản xác minh trả về Player ID khác với tài khoản vừa đăng ký.");
+
+                    Debug.Log($"[Auth] Xác minh tài khoản '{username}' thành công.");
                 }
 
                 Debug.Log($"[Auth] Bước 3/4: Xác thực thành công! Player ID: {authService.PlayerId}");
@@ -479,28 +505,7 @@ namespace Tanks.Complete
             tmp.alignment = TextAlignmentOptions.Center;
             tmp.richText = true;
 
-            go.AddComponent<TMPLinkHandler>().Init(tmp, OnLinkClicked);
-        }
-
-        public class TMPLinkHandler : MonoBehaviour, IPointerClickHandler
-        {
-            private TextMeshProUGUI m_Text;
-            private System.Action<string> m_OnLinkClicked;
-
-            public void Init(TextMeshProUGUI text, System.Action<string> onLinkClicked)
-            {
-                m_Text = text;
-                m_OnLinkClicked = onLinkClicked;
-            }
-
-            public void OnPointerClick(PointerEventData eventData)
-            {
-                int linkIndex = TMP_TextUtilities.FindIntersectingLink(m_Text, eventData.position, eventData.pressEventCamera);
-                if (linkIndex != -1)
-                {
-                    m_OnLinkClicked?.Invoke(m_Text.textInfo.linkInfo[linkIndex].GetLinkID());
-                }
-            }
+            go.AddComponent<StartScreenLinkHandler>().Init(tmp, OnLinkClicked);
         }
 
         private static void CreateSpacer(Transform parent, float height)
