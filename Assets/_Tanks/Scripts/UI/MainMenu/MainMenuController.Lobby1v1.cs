@@ -129,50 +129,50 @@ namespace Tanks.Complete
             var codeTitle = CreateTMP(view, "CodeTitle", "MÃ PHÒNG", 34, FontStyles.Bold, new Color(1f, 1f, 1f, 0.85f), TextAlignmentOptions.Center);
             codeTitle.rectTransform.anchorMin = codeTitle.rectTransform.anchorMax = codeTitle.rectTransform.pivot = new Vector2(0.5f, 0.5f);
             codeTitle.rectTransform.sizeDelta = new Vector2(700, 50);
-            codeTitle.rectTransform.anchoredPosition = new Vector2(0, 285);
+            codeTitle.rectTransform.anchoredPosition = new Vector2(0, 310);
 
             m_CodeLabel = CreateTMP(view, "CodeLabel", "------", 88, FontStyles.Bold | FontStyles.Italic, Color.white, TextAlignmentOptions.Center);
             m_CodeLabel.rectTransform.anchorMin = m_CodeLabel.rectTransform.anchorMax = m_CodeLabel.rectTransform.pivot = new Vector2(0.5f, 0.5f);
             m_CodeLabel.rectTransform.sizeDelta = new Vector2(800, 110);
-            m_CodeLabel.rectTransform.anchoredPosition = new Vector2(0, 200);
+            m_CodeLabel.rectTransform.anchoredPosition = new Vector2(0, 230);
             m_CodeLabel.characterSpacing = 12f;
 
             var copyHolder = CreateElement(view, "CopyHolder", typeof(RectTransform)).GetComponent<RectTransform>();
-            copyHolder.anchoredPosition = new Vector2(0, 110);
+            copyHolder.anchoredPosition = new Vector2(0, 130);
             CreatePillButton(copyHolder, "SAO CHÉP MÃ", m_CardColor2, 340, 66, 30, OnCopyCodeClicked);
 
-            // Hai chỗ ngồi
+            // Hai chỗ ngồi (đẩy lên một chút để nhường chỗ cho phần chọn map bên dưới)
             var slot0 = CreateRoomSlot(view, 0);
-            slot0.GetComponent<RectTransform>().anchoredPosition = new Vector2(-210, -70);
+            slot0.GetComponent<RectTransform>().anchoredPosition = new Vector2(-220, -30);
             var slot1 = CreateRoomSlot(view, 1);
-            slot1.GetComponent<RectTransform>().anchoredPosition = new Vector2(210, -70);
+            slot1.GetComponent<RectTransform>().anchoredPosition = new Vector2(220, -30);
 
-            // Khu điều khiển của Chủ phòng: chọn map + bắt đầu
+            // Khu điều khiển của Chủ phòng: chọn map + bắt đầu (kéo xuống dưới)
             var host = CreateElement(view, "HostControls", typeof(RectTransform)).GetComponent<RectTransform>();
             host.anchorMin = host.anchorMax = host.pivot = new Vector2(0.5f, 0.5f);
             host.sizeDelta = new Vector2(1200, 260);
-            host.anchoredPosition = new Vector2(0, -260);
+            host.anchoredPosition = new Vector2(0, -290);
             m_HostControls = host.gameObject;
 
             var mapTitle = CreateTMP(host, "MapTitle", "CHỌN BẢN ĐỒ", 28, FontStyles.Bold, new Color(1f, 1f, 1f, 0.85f), TextAlignmentOptions.Center);
             mapTitle.rectTransform.anchorMin = mapTitle.rectTransform.anchorMax = mapTitle.rectTransform.pivot = new Vector2(0.5f, 1f);
             mapTitle.rectTransform.sizeDelta = new Vector2(700, 40);
-            mapTitle.rectTransform.anchoredPosition = new Vector2(0, -10);
+            mapTitle.rectTransform.anchoredPosition = new Vector2(0, 10);
 
-            float[] xs = { -240, 0, 240 };
+            float[] xs = { -250, 0, 250 };
             for (int i = 0; i < k_Lobby1v1Maps.Length; i++)
             {
                 string map = k_Lobby1v1Maps[i];
                 var mapHolder = CreateElement(host, "MapPick_" + map, typeof(RectTransform)).GetComponent<RectTransform>();
                 mapHolder.anchorMin = mapHolder.anchorMax = mapHolder.pivot = new Vector2(0.5f, 1f);
-                mapHolder.anchoredPosition = new Vector2(xs[i], -55);
+                mapHolder.anchoredPosition = new Vector2(xs[i], -45);
                 var btn = CreatePillButton(mapHolder, map.ToUpper(), m_CyanColor, 210, 80, 28, () => SelectMap(map));
                 m_MapPickFills[i] = btn.GetComponent<Image>();
             }
 
             var startHolder = CreateElement(host, "StartHolder", typeof(RectTransform)).GetComponent<RectTransform>();
             startHolder.anchorMin = startHolder.anchorMax = startHolder.pivot = new Vector2(0.5f, 0f);
-            startHolder.anchoredPosition = new Vector2(0, 30);
+            startHolder.anchoredPosition = new Vector2(0, -10);
             m_StartMatchButton = CreatePillButton(startHolder, "BẮT ĐẦU TRẬN ĐẤU", m_PlayButtonColor, 560, 110, 42, OnStartMatchClicked);
 
             // Nhãn chờ (Khách)

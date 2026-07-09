@@ -38,6 +38,10 @@ namespace Tanks.Complete
         private readonly Color m_CardColor2 = new Color(0.30f, 0.62f, 0.32f);    // Xanh lá
         private readonly Color m_TextDark = new Color(0.2f, 0.2f, 0.2f);         // Chữ đen xám
 
+        [Header("Video Background")]
+        [SerializeField] private bool m_UseVideoBackground = false;
+        [SerializeField] private UnityEngine.Video.VideoClip m_BackgroundVideo;
+
         [Header("Audio Settings")]
         [SerializeField] private AudioClip m_MusicHome;
         [SerializeField] private AudioClip m_MusicModeSelect;
@@ -154,6 +158,45 @@ namespace Tanks.Complete
                         btn.onClick.AddListener(() => StartOfflineMap("Moon"));
                     }
                 }
+                   if (m_UseVideoBackground && m_BackgroundVideo != null)
+            {
+                var bg = transform.Find("MainMenuCanvas/Background");
+                if (bg != null) bg.gameObject.SetActive(false);
+                var dune = transform.Find("MainMenuCanvas/Dune");
+                if (dune != null) dune.gameObject.SetActive(false);
+
+                var vp = gameObject.AddComponent<UnityEngine.Video.VideoPlayer>();
+                vp.clip = m_BackgroundVideo;
+                vp.isLooping = true;
+                
+                // Sử dụng RenderTexture + RawImage để đảm bảo video luôn hiển thị được trên UI Canvas
+                // ngay cả khi Scene không có Main Camera.
+                var canvasTrans = transform.Find("MainMenuCanvas");
+                if (canvasTrans != null)
+                {
+                    var videoGo = new GameObject("VideoBackground");
+                    videoGo.transform.SetParent(canvasTrans, false);
+                    videoGo.transform.SetAsFirstSibling(); // Đưa xuống lớp dưới cùng của Canvas
+                    
+                    var rt = videoGo.AddComponent<RectTransform>();
+                    rt.anchorMin = Vector2.zero;
+                    rt.anchorMax = Vector2.one;
+                    rt.offsetMin = Vector2.zero;
+                    rt.offsetMax = Vector2.zero;
+
+                    var rawImg = videoGo.AddComponent<UnityEngine.UI.RawImage>();
+                    
+                    var renderTex = new RenderTexture(1920, 1080, 0);
+                    vp.renderMode = UnityEngine.Video.VideoRenderMode.RenderTexture;
+                    vp.targetTexture = renderTex;
+                    rawImg.texture = renderTex;
+                }
+
+                // Tắt tiếng của Video để không bị lẫn với nhạc nền (BGM) của game
+                vp.audioOutputMode = UnityEngine.Video.VideoAudioOutputMode.None;
+                
+                vp.Play();
+            }
 
                 UpdateState(MenuState.Home);
             }
