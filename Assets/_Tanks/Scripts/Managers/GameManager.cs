@@ -45,6 +45,10 @@ namespace Tanks.Complete
         public NetworkVariable<FixedString128Bytes> m_TitleTextSync = new NetworkVariable<FixedString128Bytes>("");
         private bool m_GameLoopStarted = false;
 
+        // [ONLINE] Trận bị bỏ dở (đối thủ thoát / mất kết nối). Cắt vòng lặp round và về menu.
+        private bool m_MatchAborted = false;
+        private bool m_ReturningToMenu = false;
+
         // [ONLINE] Lựa chọn tank của từng máy (clientId -> chỉ số prefab 0..3).
         // Mỗi máy chỉ chọn xe của riêng mình rồi gửi lên server qua SubmitTankChoiceRpc.
         private readonly Dictionary<ulong, int> m_ClientTankChoice = new Dictionary<ulong, int>();
@@ -53,7 +57,10 @@ namespace Tanks.Complete
         {
             m_IsControlEnabled.OnValueChanged += OnControlEnabledChanged;
             m_TitleTextSync.OnValueChanged += OnTitleTextChanged;
-            
+
+            if (IsServer && NetworkManager.Singleton != null)
+                NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnectedFromMatch;
+
             OnControlEnabledChanged(false, m_IsControlEnabled.Value);
             OnTitleTextChanged("", m_TitleTextSync.Value);
         }
@@ -63,6 +70,61 @@ namespace Tanks.Complete
             base.OnDestroy();
             m_IsControlEnabled.OnValueChanged -= OnControlEnabledChanged;
             m_TitleTextSync.OnValueChanged -= OnTitleTextChanged;
+
+            if (NetworkManager.Singleton != null)
+                NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnectedFromMatch;
+        }
+
+        // =====================================================================
+        //  [ONLINE] Đối thủ thoát giữa chừng / kết thúc trận
+        // =====================================================================
+
+        // Chỉ chạy trên server. Một máy rời trận -> 1v1 không còn ý nghĩa, đưa cả hai về menu.
+        private void OnClientDisconnectedFromMatch(ulong clientId)
+        {
+            if (!IsServer || m_MatchAborted || NetworkManager.Singleton == null) return;
+            if (clientId == NetworkManager.Singleton.LocalClientId) return;   // chính server tắt
+
+            m_ClientTankChoice.Remove(clientId);
+            m_MatchAborted = true;
+            Debug.Log($"[GameManager] Client {clientId} rời trận -> kết thúc trận đấu.");
+
+            SetTitleText("ĐỐI THỦ ĐÃ RỜI TRẬN");
+            ReturnEveryoneToMenu(m_EndDelay);
+        }
+
+        // Server ra lệnh cho mọi máy (kể cả chính nó) rời trận và quay về MainMenu.
+        private void ReturnEveryoneToMenu(float delay)
+        {
+            if (!IsServer || m_ReturningToMenu) return;
+            m_ReturningToMenu = true;
+
+            ReturnToMenuClientRpc(delay);
+            StartCoroutine(ReturnToMenuRoutine(delay));
+        }
+
+        [ClientRpc]
+        private void ReturnToMenuClientRpc(float delay)
+        {
+            if (IsServer) return;   // server đã tự chạy coroutine của mình
+            if (m_ReturningToMenu) return;
+            m_ReturningToMenu = true;
+            StartCoroutine(ReturnToMenuRoutine(delay));
+        }
+
+        // Cho người chơi kịp đọc thông báo, rồi cắt Netcode và tải MainMenu bằng SceneManager thường.
+        // Không dùng NetworkManager.SceneManager ở đây: phiên chơi đang kết thúc, mỗi máy tự về menu.
+        private IEnumerator ReturnToMenuRoutine(float delay)
+        {
+            m_MatchAborted = true;   // cắt vòng lặp `while (!OneTankLeft())` của RoundPlaying
+            yield return new WaitForSeconds(delay);
+
+            if (Tanks.Backend.NetworkLobbyManager.Instance != null)
+                Tanks.Backend.NetworkLobbyManager.Instance.ForceEndSession(null);
+            else if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+                NetworkManager.Singleton.Shutdown();
+
+            SceneManager.LoadScene("MainMenu");
         }
 
         private void OnControlEnabledChanged(bool oldVal, bool newVal)
@@ -117,7 +179,7 @@ namespace Tanks.Complete
                 RequestPowerUpRespawnServerRpc(spawnerPosition);
         }
 
-        [ServerRpc(RequireOwnership = false)]
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
         private void RequestPowerUpRespawnServerRpc(Vector3 spawnerPosition)
         {
             BeginPowerUpRespawn(spawnerPosition);
@@ -139,7 +201,7 @@ namespace Tanks.Complete
             PowerUpSpawner closest = null;
             float closestDistance = float.MaxValue;
 
-            foreach (var spawner in FindObjectsByType<PowerUpSpawner>(FindObjectsSortMode.None))
+            foreach (var spawner in FindObjectsByType<PowerUpSpawner>(FindObjectsInactive.Exclude))
             {
                 float distance = (spawner.transform.position - position).sqrMagnitude;
                 if (distance < closestDistance)
@@ -272,6 +334,8 @@ namespace Tanks.Complete
 
         private void Update()
         {
+            if (m_MatchAborted) return;
+
             if (IsServer)
             {
                 // Chỉ bắt đầu khi ĐỦ người VÀ mọi máy đã chọn xong xe của mình.
@@ -282,33 +346,65 @@ namespace Tanks.Complete
                     GameStart();
                 }
             }
-            else if (IsClient)
+            else if (IsClient && m_PendingSlots.Count > 0)
             {
-                var networkObjects = FindObjectsByType<NetworkObject>(FindObjectsInactive.Exclude);
-                foreach (var netObj in networkObjects)
-                {
-                    if (netObj.gameObject.name.Contains("Tank"))
-                    {
-                        ulong ownerId = netObj.OwnerClientId;
-                        int slot = (ownerId == 0) ? 0 : 1;
-                        if (slot < m_SpawnPoints.Length && m_SpawnPoints[slot].m_Instance == null)
-                        {
-                            m_SpawnPoints[slot].m_Instance = netObj.gameObject;
-                            m_SpawnPoints[slot].m_PlayerNumber = slot + 1;
-                            m_SpawnPoints[slot].Setup(this);
-                            
-                            // Make sure the newly discovered tank obeys the current control state
-                            if (m_IsControlEnabled.Value)
-                                m_SpawnPoints[slot].EnableControl();
-                            else
-                                m_SpawnPoints[slot].DisableControl();
-
-                            SetCameraTargets();
-                        }
-                    }
-                }
+                ResolvePendingSlots();
             }
         }
+
+        // =====================================================================
+        //  [ONLINE] Server chỉ định slot cho từng xe, client không tự đoán
+        // =====================================================================
+
+        // Xe mà server đã báo nhưng NetworkObject chưa kịp spawn xong trên máy này.
+        private readonly Dictionary<ulong, int> m_PendingSlots = new Dictionary<ulong, int>();
+
+        [ClientRpc]
+        private void AssignTankSlotClientRpc(ulong networkObjectId, int slot)
+        {
+            if (IsServer) return;   // server đã tự gán khi spawn
+
+            m_PendingSlots[networkObjectId] = slot;
+            ResolvePendingSlots();
+        }
+
+        // Gắn các xe đã có NetworkObject vào đúng slot; xe nào chưa tới thì để lại cho frame sau.
+        private void ResolvePendingSlots()
+        {
+            var spawned = NetworkManager.Singleton.SpawnManager.SpawnedObjects;
+
+            m_ResolvedIds.Clear();
+            foreach (var pending in m_PendingSlots)
+            {
+                if (!spawned.TryGetValue(pending.Key, out var netObj) || netObj == null)
+                    continue;
+
+                int slot = pending.Value;
+                m_ResolvedIds.Add(pending.Key);
+
+                if (slot < 0 || slot >= m_SpawnPoints.Length) continue;
+                if (m_SpawnPoints[slot].m_Instance != null) continue;
+
+                m_SpawnPoints[slot].m_Instance = netObj.gameObject;
+                m_SpawnPoints[slot].m_PlayerNumber = slot + 1;
+                m_SpawnPoints[slot].ControlIndex = -1;
+                m_SpawnPoints[slot].m_ComputerControlled = false;
+                m_SpawnPoints[slot].Setup(this);
+
+                // Make sure the newly discovered tank obeys the current control state
+                if (m_IsControlEnabled.Value)
+                    m_SpawnPoints[slot].EnableControl();
+                else
+                    m_SpawnPoints[slot].DisableControl();
+
+                SetCameraTargets();
+            }
+
+            foreach (var id in m_ResolvedIds)
+                m_PendingSlots.Remove(id);
+        }
+
+        private readonly List<ulong> m_ResolvedIds = new List<ulong>();
 
         private void SpawnAllTanks()
         {
@@ -348,12 +444,17 @@ namespace Tanks.Complete
                 Debug.Log($"[GameManager] Spawn tank cho client {clientId} bằng prefab '{tankPrefab.name}' (index {choice}).");
 
                 GameObject tankInstance = Instantiate(tankPrefab, m_SpawnPoints[i].m_SpawnPoint.position, m_SpawnPoints[i].m_SpawnPoint.rotation);
-                tankInstance.GetComponent<NetworkObject>().SpawnWithOwnership(clientId);
+                var netObj = tankInstance.GetComponent<NetworkObject>();
+                netObj.SpawnWithOwnership(clientId);
 
                 m_SpawnPoints[i].m_Instance = tankInstance;
                 m_SpawnPoints[i].m_PlayerNumber = i + 1;
                 m_SpawnPoints[i].ControlIndex = -1;
                 m_SpawnPoints[i].m_ComputerControlled = false;
+
+                // Clients cannot infer the slot from OwnerClientId — that only matches while the
+                // host happens to be first in ConnectedClientsList. Send the authoritative index.
+                AssignTankSlotClientRpc(netObj.NetworkObjectId, i);
             }
 
             foreach (var tank in m_SpawnPoints)
@@ -395,15 +496,30 @@ namespace Tanks.Complete
             // Once the 'RoundStarting' coroutine is finished, run the 'RoundPlaying' coroutine but don't return until it's finished.
             yield return StartCoroutine (RoundPlaying());
 
+            // The opponent left mid-round: ReturnToMenuRoutine is already taking us out, so stop here
+            // rather than crowning a winner over a destroyed tank.
+            if (m_MatchAborted)
+                yield break;
+
             // Once execution has returned here, run the 'RoundEnding' coroutine, again don't return until it's finished.
             yield return StartCoroutine (RoundEnding());
 
             // This code is not run until 'RoundEnding' has finished.  At which point, check if a game winner has been found.
             if (m_GameWinner != null)
             {
-                // If there is a game winner, return to the main menu so the player can pick again.
-                // Loaded by name (not index 0) because index 0 is now the Start screen.
-                SceneManager.LoadScene ("MainMenu");
+                if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+                {
+                    // Online: the guest cannot follow a plain SceneManager.LoadScene, so tell every
+                    // machine to tear down its session and walk back to the menu on its own.
+                    // RoundEnding already held the win message on screen, so leave right away.
+                    ReturnEveryoneToMenu(0f);
+                }
+                else
+                {
+                    // If there is a game winner, return to the main menu so the player can pick again.
+                    // Loaded by name (not index 0) because index 0 is now the Start screen.
+                    SceneManager.LoadScene ("MainMenu");
+                }
             }
             else
             {
@@ -439,13 +555,9 @@ namespace Tanks.Complete
 
             // Clear the text from the screen.
             SetTitleText("");
-            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
-            {
-                GameStart();
-            }
 
             // While there is not one tank left...
-            while (!OneTankLeft())
+            while (!OneTankLeft() && !m_MatchAborted)
             {
                 // ... return on the next frame.
                 yield return null;
@@ -480,6 +592,15 @@ namespace Tanks.Complete
         }
 
 
+        // A tank counts as alive only if its instance still exists. When a player disconnects, Netcode
+        // destroys the NetworkObject it owned, so m_Instance becomes a destroyed reference.
+        private bool IsTankAlive(int index)
+        {
+            var instance = m_SpawnPoints[index].m_Instance;
+            return instance != null && instance.activeSelf;
+        }
+
+
         // This is used to check if there is one or fewer tanks remaining and thus the round should end.
         private bool OneTankLeft()
         {
@@ -490,15 +611,15 @@ namespace Tanks.Complete
             for (int i = 0; i < m_PlayerCount; i++)
             {
                 // ... and if they are active, increment the counter.
-                if (m_SpawnPoints[i].m_Instance.activeSelf)
+                if (IsTankAlive(i))
                     numTanksLeft++;
             }
 
             // If there are one or fewer tanks remaining return true, otherwise return false.
             return numTanksLeft <= 1;
         }
-        
-        
+
+
         // This function is to find out if there is a winner of the round.
         // This function is called with the assumption that 1 or fewer tanks are currently active.
         private TankManager GetRoundWinner()
@@ -507,7 +628,7 @@ namespace Tanks.Complete
             for (int i = 0; i < m_PlayerCount; i++)
             {
                 // ... and if one of them is active, it is the winner so return it.
-                if (m_SpawnPoints[i].m_Instance.activeSelf)
+                if (IsTankAlive(i))
                     return m_SpawnPoints[i];
             }
 
@@ -548,6 +669,7 @@ namespace Tanks.Complete
             // Go through all the tanks and add each of their scores to the message.
             for (int i = 0; i < m_PlayerCount; i++)
             {
+                if (m_SpawnPoints[i].m_Instance == null) continue;
                 message += m_SpawnPoints[i].m_ColoredPlayerText + ": " + m_SpawnPoints[i].m_Wins + " WINS\n";
             }
 
@@ -564,8 +686,10 @@ namespace Tanks.Complete
         {
             for (int i = 0; i < m_PlayerCount; i++)
             {
+                if (m_SpawnPoints[i].m_Instance == null) continue;
+
                 m_SpawnPoints[i].Reset();
-                
+
                 if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
                 {
                     var netObj = m_SpawnPoints[i].m_Instance.GetComponent<NetworkObject>();

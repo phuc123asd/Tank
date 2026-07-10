@@ -5,6 +5,7 @@ using UnityEngine.EventSystems;
 using UnityEngine.InputSystem.UI;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+using Tanks.Backend;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -95,6 +96,11 @@ namespace Tanks.Complete
                 m_Lobby1v1Panel = CreateLobby1v1Panel(existingCanvas);
                 Debug.Log("[Lobby1v1][Awake] Đã dựng lại Lobby1v1Panel. CreateRoomBtn nối=" + (m_CreateRoomButton != null) + ", StatusRef=" + (m_Lobby1v1Status != null));
 
+                // Profile overlay (sinh lại mỗi lần để nối handler đúng)
+                var existingProfile = existingCanvas.Find("ProfileOverlay");
+                if (existingProfile != null) DestroyImmediate(existingProfile.gameObject);
+                m_ProfileOverlay = CreateProfileOverlay(existingCanvas);
+
                 var allButtons = existingCanvas.GetComponentsInChildren<Button>(true);
                 foreach (var btn in allButtons)
                 {
@@ -122,7 +128,7 @@ namespace Tanks.Complete
                         btn.onClick.RemoveAllListeners();
                         btn.onClick.AddListener(() => UpdateState(MenuState.Home));
                     }
-                    else if (parentName == "Card_TEAM COMBAT\n(5v5)")
+                    else if (IsButtonOfCard(btn, "Card_TEAM COMBAT"))
                     {
                         btn.onClick.RemoveAllListeners();
                         btn.onClick.AddListener(() => UpdateState(MenuState.Lobby5v5));
@@ -132,12 +138,12 @@ namespace Tanks.Complete
                         btn.onClick.RemoveAllListeners();
                         btn.onClick.AddListener(() => UpdateState(MenuState.ModeSelect));
                     }
-                    else if (parentName == "Card_OFFLINE BOTS")
+                    else if (IsButtonOfCard(btn, "Card_OFFLINE BOTS"))
                     {
                         btn.onClick.RemoveAllListeners();
                         btn.onClick.AddListener(() => UpdateState(MenuState.OfflineMapSelect));
                     }
-                    else if (parentName == "Card_SOLO ARENA\n(1v1)")
+                    else if (IsButtonOfCard(btn, "Card_SOLO ARENA"))
                     {
                         btn.onClick.RemoveAllListeners();
                         btn.onClick.AddListener(() => UpdateState(MenuState.Lobby1v1));
@@ -168,6 +174,7 @@ namespace Tanks.Complete
                 var vp = gameObject.AddComponent<UnityEngine.Video.VideoPlayer>();
                 vp.clip = m_BackgroundVideo;
                 vp.isLooping = true;
+                vp.SetDirectAudioMute(0, true); // Tắt hoàn toàn âm thanh của video nền
                 
                 // Sử dụng RenderTexture + RawImage để đảm bảo video luôn hiển thị được trên UI Canvas
                 // ngay cả khi Scene không có Main Camera.
@@ -198,6 +205,8 @@ namespace Tanks.Complete
                 vp.Play();
             }
 
+                WireProfileBox(existingCanvas);
+                RefreshBakedModeImages(existingCanvas);
                 UpdateState(MenuState.Home);
             }
             else
@@ -205,7 +214,28 @@ namespace Tanks.Complete
                 BuildUI();
                 UpdateState(MenuState.Home);
             }
+
+            if (ProfileManager.Instance != null)
+            {
+                ProfileManager.Instance.OnProfileLoaded += UpdateTopBarProfileInfo;
+                ProfileManager.Instance.OnProfileSaveSuccess += UpdateTopBarProfileInfo;
+                UpdateTopBarProfileInfo(ProfileManager.Instance.DisplayName);
+            }
         }
+
+        private bool IsButtonOfCard(Button btn, string cardName)
+        {
+            Transform t = btn.transform;
+            while (t != null)
+            {
+                if (t.name == cardName || t.name.StartsWith(cardName + "\n") || t.name.StartsWith(cardName + " "))
+                    return true;
+                t = t.parent;
+            }
+            return false;
+        }
+
+
 
         private static void EnsureEventSystem()
         {
@@ -241,11 +271,14 @@ namespace Tanks.Complete
             m_Lobby5v5Panel = CreateLobby5v5Panel(canvasGo.transform);
             m_Lobby1v1Panel = CreateLobby1v1Panel(canvasGo.transform);
             m_OfflineMapSelectPanel = CreateOfflineMapSelectPanel(canvasGo.transform);
+            m_ProfileOverlay = CreateProfileOverlay(canvasGo.transform);
+            WireProfileBox(canvasGo.transform);
         }
 
         private void UpdateState(MenuState newState)
         {
             m_CurrentState = newState;
+            HideProfilePanel();
             if (m_HomePanel) m_HomePanel.SetActive(m_CurrentState == MenuState.Home);
             if (m_ModeSelectPanel) m_ModeSelectPanel.SetActive(m_CurrentState == MenuState.ModeSelect);
             if (m_Lobby5v5Panel) m_Lobby5v5Panel.SetActive(m_CurrentState == MenuState.Lobby5v5);

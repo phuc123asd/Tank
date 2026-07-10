@@ -1,9 +1,13 @@
+using System.Collections.Generic;
 using TMPro;
+using Unity.Services.Authentication;
+using Unity.Services.Core;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem.UI;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+using UnityEngine.Video;
 using Tanks.Backend;
 
 namespace Tanks.Complete
@@ -62,6 +66,14 @@ namespace Tanks.Complete
         public float m_BottomLinksHeight = 40f;
         [Tooltip("Cỡ chữ dòng liên kết dưới cùng.")]
         public float m_BottomLinksFontSize = 22f;
+        [Tooltip("Chiều cao của dòng thông báo lỗi/trạng thái.")]
+        public float m_StatusHeight = 56f;
+        [Tooltip("Cỡ chữ của dòng thông báo lỗi/trạng thái.")]
+        public float m_StatusFontSize = 22f;
+        
+        [Header("Background Video (Optional)")]
+        [Tooltip("Video nền của màn hình Start. Kéo thả VideoClip vào đây. Nếu để trống sẽ dùng ảnh mặc định.")]
+        public VideoClip m_BackgroundVideo;
 
         [Header("UI Color Palette")]
         public Color m_BgTop = new Color(0.914f, 0.576f, 0.176f); // #E9932D
@@ -75,6 +87,9 @@ namespace Tanks.Complete
         public Color m_InputFill = Color.white;
         public Color m_TextDark = new Color(0.173f, 0.094f, 0.063f);
         public Color m_HintGray = new Color(0.6f, 0.6f, 0.6f);
+        public Color m_ErrorColor = new Color(0.451f, 0.043f, 0.043f);   // #730B0B
+        public Color m_SuccessColor = new Color(0.075f, 0.290f, 0.129f); // #134A21
+        public Color m_InfoColor = new Color(0.173f, 0.094f, 0.063f);
 
         [Header("Audio Settings")]
         [SerializeField] private AudioClip m_BackgroundMusic;
@@ -92,6 +107,13 @@ namespace Tanks.Complete
         private TMP_InputField m_ConfirmPasswordField;
         private Button m_PlayButton;
         private bool m_Loading;
+
+        private TextMeshProUGUI m_StatusLabel;
+
+        // Mọi ô mật khẩu đang hiển thị, để nút con mắt bật/tắt tất cả cùng lúc.
+        private readonly List<TMP_InputField> m_PasswordFields = new List<TMP_InputField>();
+        private readonly List<TextMeshProUGUI> m_RevealLabels = new List<TextMeshProUGUI>();
+        private bool m_PasswordVisible;
 
         private void Awake()
         {
@@ -156,8 +178,19 @@ namespace Tanks.Complete
 
         private void EnsureUGSManager()
         {
-            if (FindObject<UGSManager>() == null)
-                new GameObject("UGSManager", typeof(UGSManager));
+            var ugs = FindObject<UGSManager>();
+            if (ugs == null)
+            {
+                var go = new GameObject("UGSManager", typeof(UGSManager));
+                go.AddComponent<ProfileManager>();
+            }
+            else
+            {
+                if (ugs.GetComponent<ProfileManager>() == null)
+                {
+                    ugs.gameObject.AddComponent<ProfileManager>();
+                }
+            }
         }
 
         private void OnEnable() => BuildUI();
@@ -165,6 +198,10 @@ namespace Tanks.Complete
 
         private void CleanUI()
         {
+            m_PasswordFields.Clear();
+            m_RevealLabels.Clear();
+            m_StatusLabel = null;
+
             for (int i = transform.childCount - 1; i >= 0; i--)
             {
                 var child = transform.GetChild(i).gameObject;
@@ -194,47 +231,56 @@ namespace Tanks.Complete
         {
             if (m_Loading) return;
 
-            // Xoá \u200B vì TextMeshPro trong Editor thường tự động nhét ký tự vô hình này vào cuối chuỗi text
-            string username = m_UsernameField.text.Replace("\u200B", "").Trim();
-            // Xoá khoảng trắng vô hình của TextMeshPro và các ký tự xuống dòng (nếu có khi copy/paste hoặc bấm Enter)
-            string password = m_PasswordField.text.Replace("\u200B", "").Trim('\r', '\n');
+            string username = StripInvisible(m_UsernameField.text).Trim();
+            string password = StripInvisible(m_PasswordField.text);
 
             if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
             {
-                Debug.LogWarning("[StartScreenController] Tên đăng nhập và mật khẩu không được để trống.");
+                SetStatus("Vui lòng nhập cả tên đăng nhập và mật khẩu.", m_ErrorColor);
+                return;
+            }
+
+            // Không tự cắt dấu cách của mật khẩu: một tài khoản có thể đã được đăng ký kèm dấu cách,
+            // cắt đi sẽ khiến nó vĩnh viễn không đăng nhập lại được. Báo cho người dùng thay vì sửa ngầm.
+            if (password != password.Trim())
+            {
+                SetStatus("Mật khẩu có dấu cách ở đầu hoặc cuối. Bấm HIỆN để kiểm tra lại.", m_ErrorColor);
                 return;
             }
 
             if (m_CurrentState == UIState.Register)
             {
-                string confirmPassword = m_ConfirmPasswordField.text.Replace("\u200B", "").Trim('\r', '\n');
+                string confirmPassword = StripInvisible(m_ConfirmPasswordField.text);
                 if (password != confirmPassword)
                 {
-                    Debug.LogError("[Auth] Lỗi: Mật khẩu xác nhận không trùng khớp.");
+                    SetStatus("Mật khẩu xác nhận không trùng khớp.", m_ErrorColor);
                     return;
                 }
             }
 
+            if (UnityServices.State != ServicesInitializationState.Initialized)
+            {
+                SetStatus("Đang kết nối tới máy chủ, vui lòng thử lại sau vài giây.", m_InfoColor);
+                return;
+            }
+
             m_Loading = true;
+            SetStatus(m_CurrentState == UIState.Login ? "Đang đăng nhập..." : "Đang tạo tài khoản...", m_InfoColor);
 
             try
             {
-                var authService = Unity.Services.Authentication.AuthenticationService.Instance;
+                var authService = AuthenticationService.Instance;
 
-                Debug.Log("[Auth] Bước 1/4: Kiểm tra trạng thái phiên đăng nhập cũ...");
+                // Ghi lại đặc điểm chuỗi (không ghi chính mật khẩu) để lỗi sai mật khẩu lộ ra ngay ở log.
+                Debug.Log($"[Auth] Bước 1/4: username='{username}' ({username.Length} ký tự), " +
+                          $"mật khẩu {password.Length} ký tự.");
+
                 if (authService.IsSignedIn)
                 {
                     Debug.Log($"[Auth] Phát hiện phiên cũ của Player ID {authService.PlayerId}. Đang xoá hoàn toàn...");
                     authService.SignOut(true);
                 }
 
-                // Use one temporary profile while the game is open. Credentials are
-                // removed on logout/quit, so the next launch can use any account.
-                if (authService.Profile != "default")
-                {
-                    authService.SwitchProfile("default");
-                    Debug.Log("[Auth] Đã trở về hồ sơ đăng nhập mặc định.");
-                }
                 if (authService.SessionTokenExists)
                     authService.ClearSessionToken();
 
@@ -264,6 +310,14 @@ namespace Tanks.Complete
                 }
 
                 Debug.Log($"[Auth] Bước 3/4: Xác thực thành công! Player ID: {authService.PlayerId}");
+                SetStatus("Thành công! Đang vào game...", m_SuccessColor);
+
+                if (ProfileManager.Instance != null)
+                {
+                    Debug.Log("[Auth] Đang tải Profile từ Cloud Save...");
+                    await ProfileManager.Instance.LoadProfileAsync();
+                }
+
                 Debug.Log($"[Auth] Bước 4/4: Tải màn chơi tiếp theo: '{m_NextScene}'...");
 
                 if (Application.CanStreamedLevelBeLoaded(m_NextScene))
@@ -273,14 +327,111 @@ namespace Tanks.Complete
                 else
                 {
                     Debug.LogError($"[Auth] Cảnh '{m_NextScene}' chưa được thêm vào Build Settings.");
+                    SetStatus($"Lỗi cấu hình: cảnh '{m_NextScene}' chưa có trong Build Settings.", m_ErrorColor);
                     m_Loading = false;
                 }
             }
             catch (System.Exception e)
             {
-                Debug.LogError($"[Auth] Giao dịch xác thực thất bại: {e.Message}");
+                string friendly = DescribeAuthError(e, m_CurrentState);
+                Debug.LogError($"[Auth] Xác thực thất bại: {friendly} (gốc: {e.GetType().Name} - {e.Message})");
+                SetStatus(friendly, m_ErrorColor);
                 m_Loading = false;
             }
+        }
+
+        /// <summary>
+        /// Bỏ các ký tự vô hình mà TMP hoặc thao tác copy/paste chèn vào, nhưng GIỮ NGUYÊN dấu cách thật.
+        /// </summary>
+        private static string StripInvisible(string raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return string.Empty;
+            return raw
+                .Replace("\u200B", "")  // zero-width space
+                .Replace("\u200E", "")  // left-to-right mark
+                .Replace("\u200F", "")  // right-to-left mark
+                .Replace("\uFEFF", "")  // byte-order mark
+                .Trim('\r', '\n');
+        }
+
+        /// <summary>
+        /// Dịch lỗi xác thực của UGS sang thông báo tiếng Việt.
+        ///
+        /// Unity CỐ Ý không phân biệt "sai tên đăng nhập" với "sai mật khẩu": cả hai đều trả về
+        /// ErrorCode 10002 (InvalidParameters) kèm cùng câu "Invalid username or password", nhằm chống
+        /// dò tài khoản. Các trường hợp còn lại chỉ tách được bằng cách so chuỗi Detail của server,
+        /// nên phần so chuỗi dưới đây sẽ vỡ nếu Unity đổi câu chữ - luôn giữ nhánh mặc định trả message gốc.
+        /// </summary>
+        private static string DescribeAuthError(System.Exception exception, UIState state)
+        {
+            if (exception is AuthenticationException authException)
+            {
+                int code = authException.ErrorCode;
+
+                if (code == AuthenticationErrorCodes.BannedUser)
+                    return "Tài khoản này đã bị khoá.";
+
+                if (code == AuthenticationErrorCodes.ClientInvalidUserState)
+                    return "Vẫn còn một phiên đăng nhập cũ. Hãy thử lại.";
+
+                if (code == AuthenticationErrorCodes.InvalidSessionToken)
+                    return "Phiên đăng nhập đã hết hạn. Hãy đăng nhập lại.";
+
+                if (code == AuthenticationErrorCodes.EnvironmentMismatch)
+                    return "Sai môi trường UGS (Environment). Kiểm tra Project Settings > Services.";
+
+                if (code == AuthenticationErrorCodes.InvalidParameters)
+                {
+                    string detail = authException.Message ?? string.Empty;
+
+                    if (detail.Contains("already exists"))
+                        return "Tên đăng nhập này đã có người dùng. Hãy chọn tên khác.";
+
+                    if (detail.Contains("Invalid username or password"))
+                        return state == UIState.Login
+                            ? "Sai tên đăng nhập hoặc mật khẩu. (Unity không cho biết sai cái nào.)"
+                            : "Tên đăng nhập hoặc mật khẩu không hợp lệ.";
+
+                    if (detail.Contains("format"))
+                        return "Sai định dạng. Tên đăng nhập: 3-20 ký tự (chữ, số, . - @ _). " +
+                               "Mật khẩu: 8-30 ký tự, đủ chữ hoa, chữ thường, số và ký tự đặc biệt.";
+
+                    return $"Thông tin không hợp lệ: {detail}";
+                }
+
+                return $"Lỗi xác thực ({code}): {authException.Message}";
+            }
+
+            if (exception is RequestFailedException requestException)
+            {
+                int code = requestException.ErrorCode;
+
+                if (code == CommonErrorCodes.TransportError)
+                    return "Không kết nối được máy chủ. Kiểm tra mạng hoặc tắt VPN.";
+
+                if (code == CommonErrorCodes.Timeout)
+                    return "Máy chủ phản hồi quá chậm. Thử lại sau.";
+
+                if (code == CommonErrorCodes.ServiceUnavailable)
+                    return "Dịch vụ Unity đang bảo trì. Thử lại sau.";
+
+                if (code == CommonErrorCodes.TooManyRequests)
+                    return "Bạn thử quá nhiều lần. Chờ một lát rồi thử lại.";
+
+                return $"Yêu cầu thất bại ({code}): {requestException.Message}";
+            }
+
+            if (exception is ServicesInitializationException)
+                return "Dịch vụ Unity chưa khởi tạo xong. Thử lại sau vài giây.";
+
+            return exception.Message;
+        }
+
+        private void SetStatus(string message, Color color)
+        {
+            if (m_StatusLabel == null) return;
+            m_StatusLabel.text = message;
+            m_StatusLabel.color = color;
         }
 
         private void OnLinkClicked(string linkId)
@@ -326,17 +477,63 @@ namespace Tanks.Complete
         /// </summary>
         private void BuildBackground(Transform canvasRoot)
         {
-            var bgImg = CreateImage(canvasRoot, "Background", CreateVerticalGradientSprite(m_BgTop, m_BgBottom));
-            StretchFull(bgImg.rectTransform);
+            if (m_BackgroundVideo != null)
+            {
+                var videoGo = CreateElement(canvasRoot, "VideoBackground", typeof(VideoPlayer));
+                var vp = videoGo.GetComponent<VideoPlayer>();
+                vp.playOnAwake = true;
+                vp.clip = m_BackgroundVideo;
+                vp.renderMode = VideoRenderMode.CameraFarPlane;
+                vp.targetCamera = Camera.main;
+                if (vp.targetCamera == null)
+                {
+#if UNITY_2023_1_OR_NEWER
+                    vp.targetCamera = FindFirstObjectByType<Camera>();
+#else
+                    vp.targetCamera = FindObjectOfType<Camera>();
+#endif
+                }
+                vp.isLooping = false; // Tắt lặp lại để giữ nguyên cảnh kính vỡ cuối cùng
+                
+                // Mẹo tắt tiếng 100%: Chuyển âm thanh sang AudioSource nhưng không cung cấp AudioSource nào cả
+                vp.audioOutputMode = VideoAudioOutputMode.AudioSource; 
+                vp.SetTargetAudioSource(0, null);
+                
+                // Trả về luôn để không vẽ đè ảnh nền che mất video
+                return;
+            }
+            
+            // Nếu Inspector chưa gán Video, thì thử tải ảnh mặc định từ Resources
+            Sprite desertBg = Resources.Load<Sprite>("background_desert");
+            if (desertBg == null)
+            {
+                var sprites = Resources.LoadAll<Sprite>("background_desert");
+                if (sprites != null && sprites.Length > 0)
+                {
+                    desertBg = sprites[0];
+                }
+            }
 
-            var duneImg = CreateImage(canvasRoot, "Dunes", CreateDuneSilhouetteSprite(1024, 128, m_HorizonCol));
-            duneImg.preserveAspect = false;
-            var duneRt = duneImg.rectTransform;
-            duneRt.anchorMin = new Vector2(0f, 0f);
-            duneRt.anchorMax = new Vector2(1f, 0f);
-            duneRt.pivot = new Vector2(0.5f, 0f);
-            duneRt.offsetMin = Vector2.zero;
-            duneRt.offsetMax = new Vector2(0f, 220f);
+            if (desertBg != null)
+            {
+                var bgImg = CreateImage(canvasRoot, "Background", desertBg);
+                bgImg.preserveAspect = false; // Tràn viền
+                StretchFull(bgImg.rectTransform);
+            }
+            else
+            {
+                var bgImg = CreateImage(canvasRoot, "Background", CreateVerticalGradientSprite(m_BgTop, m_BgBottom));
+                StretchFull(bgImg.rectTransform);
+
+                var duneImg = CreateImage(canvasRoot, "Dunes", CreateDuneSilhouetteSprite(1024, 128, m_HorizonCol));
+                duneImg.preserveAspect = false;
+                var duneRt = duneImg.rectTransform;
+                duneRt.anchorMin = new Vector2(0f, 0f);
+                duneRt.anchorMax = new Vector2(1f, 0f);
+                duneRt.pivot = new Vector2(0.5f, 0f);
+                duneRt.offsetMin = Vector2.zero;
+                duneRt.offsetMax = new Vector2(0f, 220f);
+            }
         }
 
         /// <summary>
@@ -346,7 +543,11 @@ namespace Tanks.Complete
         {
             var panel = CreateElement(canvasRoot, "FormPanel", typeof(RectTransform), typeof(VerticalLayoutGroup));
             var panelRt = panel.GetComponent<RectTransform>();
-            panelRt.anchorMin = panelRt.anchorMax = panelRt.pivot = new Vector2(0.5f, 0.5f);
+            
+            // Dời toàn bộ khung nhập liệu sang bên phải màn hình
+            panelRt.anchorMin = panelRt.anchorMax = panelRt.pivot = new Vector2(1f, 0.5f);
+            panelRt.anchoredPosition = new Vector2(-150, 0); // Cách lề phải 150px
+            panelRt.localScale = new Vector3(0.85f, 0.85f, 1f); // Thu nhỏ lại một chút cho gọn
             panelRt.sizeDelta = m_PanelSize;
 
             var vlg = panel.GetComponent<VerticalLayoutGroup>();
@@ -357,8 +558,7 @@ namespace Tanks.Complete
 
             CreateShadowedTitle(panel.transform, m_Title);
 
-            string calloutText = m_CurrentState == UIState.Login ? m_CalloutText : "REGISTER";
-            CreateCyanCallout(panel.transform, calloutText);
+            // Đã bỏ khối CreateCyanCallout ("LOGIN") theo yêu cầu
 
             CreateSpacer(panel.transform, 12f);
 
@@ -375,6 +575,10 @@ namespace Tanks.Complete
             {
                 m_ConfirmPasswordField = null;
             }
+
+            ApplyPasswordVisibility();
+
+            m_StatusLabel = CreateStatusLabel(panel.transform);
 
             CreateSpacer(panel.transform, 8f);
 
@@ -439,12 +643,13 @@ namespace Tanks.Complete
             iconTmp.color = m_HintGray;
             iconTmp.alignment = TextAlignmentOptions.MidlineLeft;
 
-            // Vùng hiển thị Text (TextArea) lệch về bên phải để chừa chỗ cho Icon
+            // Vùng hiển thị Text (TextArea) lệch về bên phải để chừa chỗ cho Icon.
+            // Ô mật khẩu chừa thêm chỗ bên phải cho nút HIỆN/ẨN.
             var textArea = CreateElement(fillGo.transform, "TextArea", typeof(RectTransform), typeof(RectMask2D));
             var textAreaRt = textArea.GetComponent<RectTransform>();
             StretchFull(textAreaRt);
             textAreaRt.offsetMin = new Vector2(90f, 12f);
-            textAreaRt.offsetMax = new Vector2(-40f, -12f);
+            textAreaRt.offsetMax = new Vector2(isPassword ? -135f : -40f, -12f);
 
             var placeholderTmp = CreateTMP(textArea.transform, "Placeholder", placeholder, m_InputFontSize, FontStyles.Bold, new Color(0.55f, 0.55f, 0.55f), TextAlignmentOptions.MidlineLeft);
             var textTmp = CreateTMP(textArea.transform, "Text", "", m_InputFontSize, FontStyles.Bold, m_TextDark, TextAlignmentOptions.MidlineLeft);
@@ -454,9 +659,85 @@ namespace Tanks.Complete
             input.textComponent = textTmp;
             input.placeholder = placeholderTmp;
             input.characterLimit = 30;
+
+            // contentType phải đặt trước, vì setter của nó ghi đè lineType/inputType/characterValidation.
             input.contentType = isPassword ? TMP_InputField.ContentType.Password : TMP_InputField.ContentType.Standard;
 
+            // Trên macOS, Esc mặc định khôi phục chuỗi cũ và click vào ô sẽ bôi đen toàn bộ;
+            // cả hai đều gây mất chữ ngoài ý muốn khi người dùng đang sửa mật khẩu.
+            input.restoreOriginalTextOnEscape = false;
+            input.onFocusSelectAll = false;
+            input.caretWidth = 2;
+            input.customCaretColor = true;
+            input.caretColor = m_TextDark;
+            input.selectionColor = new Color(0.227f, 0.706f, 0.851f, 0.45f);
+
+            if (isPassword)
+            {
+                m_PasswordFields.Add(input);
+                CreateRevealButton(fillGo.transform);
+            }
+
             return input;
+        }
+
+        /// <summary>
+        /// Nút HIỆN/ẨN nằm bên phải ô mật khẩu. Một nút bất kỳ sẽ bật/tắt mọi ô mật khẩu cùng lúc,
+        /// để ô PASSWORD và CONFIRM PASSWORD luôn ở cùng trạng thái.
+        /// </summary>
+        private void CreateRevealButton(Transform parent)
+        {
+            var go = CreateElement(parent, "RevealButton", typeof(RectTransform), typeof(Image), typeof(Button));
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(1f, 0.5f);
+            rt.anchoredPosition = new Vector2(-24f, 0f);
+            rt.sizeDelta = new Vector2(96f, 52f);
+
+            var img = go.GetComponent<Image>();
+            img.sprite = CreateRoundedRectSprite(48, 22, new Color(0.93f, 0.93f, 0.93f), m_HintGray, 2);
+            img.type = Image.Type.Sliced;
+
+            var label = CreateTMP(go.transform, "Label", "", 20f, FontStyles.Bold, m_TextDark);
+            m_RevealLabels.Add(label);
+
+            var button = go.GetComponent<Button>();
+            button.targetGraphic = img; // Button tạo bằng code không tự gán, thiếu nó thì bấm không đổi màu.
+            button.onClick.AddListener(TogglePasswordVisibility);
+        }
+
+        private void TogglePasswordVisibility()
+        {
+            m_PasswordVisible = !m_PasswordVisible;
+            ApplyPasswordVisibility();
+        }
+
+        private void ApplyPasswordVisibility()
+        {
+            foreach (var field in m_PasswordFields)
+            {
+                if (field == null) continue;
+
+                field.contentType = m_PasswordVisible
+                    ? TMP_InputField.ContentType.Standard
+                    : TMP_InputField.ContentType.Password;
+
+                // Bắt buộc: đổi contentType không tự vẽ lại chuỗi đang hiển thị.
+                field.ForceLabelUpdate();
+            }
+
+            foreach (var label in m_RevealLabels)
+            {
+                if (label != null) label.text = m_PasswordVisible ? "ẨN" : "HIỆN";
+            }
+        }
+
+        private TextMeshProUGUI CreateStatusLabel(Transform parent)
+        {
+            var rt = CreateLayoutGroupItem(parent, "StatusLabel", m_StatusHeight);
+            var tmp = CreateTMP(rt, "Text", "", m_StatusFontSize, FontStyles.Bold, m_ErrorColor);
+            tmp.textWrappingMode = TextWrappingModes.Normal;
+            tmp.overflowMode = TextOverflowModes.Overflow;
+            return tmp;
         }
 
         private Button CreatePlayButton(Transform parent, string label, UnityEngine.Events.UnityAction onClick)

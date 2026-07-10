@@ -27,10 +27,12 @@ namespace Tanks.Backend
         public string LastError { get; private set; }
         private bool m_IsConnecting;
 
-        // Trạng thái kiểm tra kết nối và đăng nhập
+        // Trạng thái kiểm tra kết nối và đăng nhập.
+        // AuthenticationService.Instance NÉM ServicesInitializationException nếu UnityServices chưa
+        // khởi tạo xong, nên mọi truy cập phải đi qua IsInitialized trước.
         public bool IsInitialized => UnityServices.State == ServicesInitializationState.Initialized;
-        public bool IsSignedIn => AuthenticationService.Instance.IsSignedIn;
-        public string PlayerId => AuthenticationService.Instance.PlayerId;
+        public bool IsSignedIn => IsInitialized && AuthenticationService.Instance.IsSignedIn;
+        public string PlayerId => IsInitialized ? AuthenticationService.Instance.PlayerId : null;
 
         private void Awake()
         {
@@ -58,10 +60,8 @@ namespace Tanks.Backend
             UnityEngine.SceneManagement.SceneManager.LoadScene("Start");
         }
 
-        private void OnApplicationQuit()
-        {
-            ClearAuthenticationSession();
-        }
+        // Bỏ OnApplicationQuit() để giữ lại Session Token giữa các lần tắt mở game.
+        // Đảm bảo dữ liệu Cloud Save của user ẩn danh không bị mất.
 
         private static void ClearAuthenticationSession()
         {
@@ -118,12 +118,10 @@ namespace Tanks.Backend
 
                 var options = new Unity.Services.Core.InitializationOptions();
                 
-                // Cố định Profile riêng biệt cho Editor và Build để tránh đụng độ bộ nhớ cache cục bộ (SQLite) khi chạy trên cùng 1 máy tính.
-#if UNITY_EDITOR
-                options.SetProfile("editor_profile");
-#else
-                options.SetProfile("build_profile");
-#endif
+                // Sử dụng Profile ngẫu nhiên cho mỗi lần chạy để đảm bảo có thể mở 2-3 cửa sổ Game trên cùng 1 máy tính 
+                // mà không bị đụng độ bộ nhớ đăng nhập (tránh lỗi chỉ đăng nhập được 1 user).
+                string uniqueProfile = "profile_" + System.Guid.NewGuid().ToString().Substring(0, 8);
+                options.SetProfile(uniqueProfile);
 
                 // Thiết lập thời gian chờ tối đa (Timeout) là 8 giây để tránh treo giao diện.
                 var initTask = UnityServices.InitializeAsync(options);
