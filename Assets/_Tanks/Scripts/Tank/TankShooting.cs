@@ -207,6 +207,7 @@ namespace Tanks.Complete
             }
             else
             {
+                ShellExplosion.PlayLaunchEffectFromShellPrefab(m_Shell, m_FireTransform);
                 Rigidbody shellInstance = Instantiate (m_Shell, m_FireTransform.position, m_FireTransform.rotation) as Rigidbody;
                 shellInstance.linearVelocity = m_CurrentLaunchForce * m_FireTransform.forward;
 

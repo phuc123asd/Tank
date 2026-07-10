@@ -37,6 +37,7 @@ namespace Tanks.Complete
         private bool m_Networked;                       // Có đang chạy Netcode không
         private int m_NetSelectedIndex = -1;            // Chỉ số xe máy này đang chọn (chưa xác nhận)
         private bool m_NetWaitingForSpawn;              // Đã bấm SẴN SÀNG, đang chờ server spawn xe
+        private bool m_OfflineStartLocked;
 
         private void Awake()
         {
@@ -138,13 +139,7 @@ namespace Tanks.Complete
                         slot.SetPlayerControlling(-1);
                     }
 
-                    // If 2 slots or more are now used, we can start the game, so re-enable the Start button and update
-                    // the text on the Start button
-                    if (m_SlotUsed >= 2)
-                    {
-                        m_StartButtonText.text = "Start";
-                        m_StartButton.interactable = true;
-                    }
+                    RefreshOfflineStartButton();
                 });
 
                 // Setup the Off button on the tank controller section
@@ -155,11 +150,7 @@ namespace Tanks.Complete
                     
                     // If after removing that tank from the used tanks we have less than 2 slots open, disable the 
                     // Start button and reset the text to the required warning
-                    if (m_SlotUsed < 2)
-                    {
-                        m_StartButtonText.text = "2 Tanks required";
-                        m_StartButton.interactable = false;
-                    }
+                    RefreshOfflineStartButton();
                 });
 
                 // Setup the Player 1 control button
@@ -178,6 +169,7 @@ namespace Tanks.Complete
                             localSlot.SetPlayerControlling(-1);
                         }
                     }
+                    RefreshOfflineStartButton();
                 });
 
                 // Setup the Player 2 control button
@@ -196,15 +188,31 @@ namespace Tanks.Complete
                             localSlot.SetPlayerControlling(-1);
                         }
                     }
+                    RefreshOfflineStartButton();
                 });
 
                 // Setup the Computer control button
-                slot.m_ComputerControlButton.onClick.AddListener(() => { slot.SetPlayerControlling(-1); });
+                slot.m_ComputerControlButton.onClick.AddListener(() =>
+                {
+                    slot.SetPlayerControlling(-1);
+                    RefreshOfflineStartButton();
+                });
             }
         }
 
         void StartGame()
         {
+            if (m_OfflineStartLocked)
+                return;
+
+            if (!IsValidOfflineSelection(out string reason))
+            {
+                m_StartButtonText.text = reason;
+                m_StartButton.interactable = false;
+                return;
+            }
+
+            m_OfflineStartLocked = true;
             // When starting the game, we disable the Start Menu
             m_StartMenuRoot.gameObject.SetActive(false);
 
@@ -289,6 +297,67 @@ namespace Tanks.Complete
             m_StartButton.interactable = IsNetworkGameManagerReady();
             m_StartButtonText.text = "SẴN SÀNG";
             Debug.Log($"[GameUIHandler] Máy này đang chọn xe index {index} (bấm SẴN SÀNG để xác nhận).");
+        }
+
+        private void RefreshOfflineStartButton()
+        {
+            if (m_Networked || m_StartButtonText == null || m_StartButton == null || m_OfflineStartLocked)
+                return;
+
+            bool valid = IsValidOfflineSelection(out string message);
+            m_StartButtonText.text = valid ? "Start" : message;
+            m_StartButton.interactable = valid;
+        }
+
+        private bool IsValidOfflineSelection(out string message)
+        {
+            int selected = 0;
+            bool hasP1 = false;
+            bool hasP2 = false;
+            bool hasComputer = false;
+
+            foreach (var slot in m_PlayerSlots)
+            {
+                if (slot == null || slot.IsOpen) continue;
+
+                selected++;
+                hasP1 |= slot.PlayerControlling == 1;
+                hasP2 |= slot.PlayerControlling == 2;
+                hasComputer |= slot.IsComputer;
+            }
+
+            if (selected < 2)
+            {
+                message = "2 Tanks required";
+                return false;
+            }
+
+            if (selected > 2)
+            {
+                message = "Chỉ chọn 2 tank";
+                return false;
+            }
+
+            if (!hasP1)
+            {
+                message = "Cần P1";
+                return false;
+            }
+
+            if (hasP2 && hasComputer)
+            {
+                message = "Chọn P1+P2 hoặc P+Máy";
+                return false;
+            }
+
+            if (!hasP2 && !hasComputer)
+            {
+                message = "Chọn P2 hoặc Máy";
+                return false;
+            }
+
+            message = "Start";
+            return true;
         }
 
         // Xác nhận lựa chọn: gửi lên server và chuyển sang trạng thái chờ đối thủ.

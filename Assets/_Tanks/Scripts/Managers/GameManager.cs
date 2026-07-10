@@ -243,10 +243,8 @@ namespace Tanks.Complete
 
             m_TitleText = textRef.Text;
             SetTitleText("");
-            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
-            {
-                GameStart();
-            }
+            // Offline games are started by GameUIHandler after the player picks exactly two tanks.
+            // Starting here would spawn every scene spawn point before the menu selection exists.
 
             // The GameManager require 4 tanks prefabs, as the start menu have 4 fixed slot and need the 4 tanks to show there
             if (m_Tank1Prefab == null || m_Tank2Prefab == null || m_Tank3Prefab == null || m_Tank4Prefab == null)
@@ -410,20 +408,27 @@ namespace Tanks.Complete
         {
             if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
             {
-                m_PlayerCount = m_SpawnPoints.Length;
+                m_PlayerCount = m_TankData != null && m_TankData.Length > 0
+                    ? Mathf.Min(m_TankData.Length, m_SpawnPoints.Length)
+                    : Mathf.Min(2, m_SpawnPoints.Length);
+
                 for (int i = 0; i < m_PlayerCount; i++)
                 {
-                    GameObject tankPrefab = (i == 0) ? m_Tank1Prefab : m_Tank2Prefab;
+                    GameObject tankPrefab = m_TankData != null && i < m_TankData.Length && m_TankData[i].UsedPrefab != null
+                        ? m_TankData[i].UsedPrefab
+                        : ((i == 0) ? m_Tank1Prefab : m_Tank2Prefab);
                     GameObject tankInstance = Instantiate(tankPrefab, m_SpawnPoints[i].m_SpawnPoint.position, m_SpawnPoints[i].m_SpawnPoint.rotation);
 
                     m_SpawnPoints[i].m_Instance = tankInstance;
                     m_SpawnPoints[i].m_PlayerNumber = i + 1;
-                    m_SpawnPoints[i].ControlIndex = (i == 0) ? 1 : 2;
-                    m_SpawnPoints[i].m_ComputerControlled = (i > 0);
+                    m_SpawnPoints[i].ControlIndex = m_TankData != null && i < m_TankData.Length ? m_TankData[i].ControlIndex : (i == 0 ? 1 : -1);
+                    m_SpawnPoints[i].m_ComputerControlled = m_TankData != null && i < m_TankData.Length ? m_TankData[i].IsComputer : (i > 0);
+                    m_SpawnPoints[i].m_PlayerColor = m_TankData != null && i < m_TankData.Length ? m_TankData[i].TankColor : m_SpawnPoints[i].m_PlayerColor;
                 }
 
-                foreach (var tank in m_SpawnPoints)
+                for (int i = 0; i < m_PlayerCount; i++)
                 {
+                    var tank = m_SpawnPoints[i];
                     if (tank.m_Instance == null) continue;
                     tank.Setup(this);
                 }
