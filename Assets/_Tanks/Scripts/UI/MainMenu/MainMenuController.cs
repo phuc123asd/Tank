@@ -131,7 +131,7 @@ namespace Tanks.Complete
                     else if (IsButtonOfCard(btn, "Card_TEAM COMBAT"))
                     {
                         btn.onClick.RemoveAllListeners();
-                        btn.onClick.AddListener(() => UpdateState(MenuState.Lobby5v5));
+                        btn.onClick.AddListener(() => { SetOnlineMode(true); UpdateState(MenuState.Lobby5v5); });
                     }
                     else if (parentName == "PillButton_< RỜI PHÒNG")
                     {
@@ -146,7 +146,7 @@ namespace Tanks.Complete
                     else if (IsButtonOfCard(btn, "Card_SOLO ARENA"))
                     {
                         btn.onClick.RemoveAllListeners();
-                        btn.onClick.AddListener(() => UpdateState(MenuState.Lobby1v1));
+                        btn.onClick.AddListener(() => { SetOnlineMode(false); UpdateState(MenuState.Lobby1v1); });
                     }
                     else if (parentName == "MapCard_DESERT")
                     {
@@ -207,6 +207,7 @@ namespace Tanks.Complete
 
                 WireProfileBox(existingCanvas);
                 RefreshBakedModeImages(existingCanvas);
+                RefreshBaked2v2Labels(existingCanvas);
                 UpdateState(MenuState.Home);
             }
             else
@@ -233,6 +234,15 @@ namespace Tanks.Complete
                 t = t.parent;
             }
             return false;
+        }
+
+        private static void RefreshBaked2v2Labels(Transform canvasRoot)
+        {
+            foreach (var label in canvasRoot.GetComponentsInChildren<TextMeshProUGUI>(true))
+            {
+                if (label.text.Contains("5v5"))
+                    label.text = label.text.Replace("5v5", "2v2");
+            }
         }
 
 
@@ -281,8 +291,9 @@ namespace Tanks.Complete
             HideProfilePanel();
             if (m_HomePanel) m_HomePanel.SetActive(m_CurrentState == MenuState.Home);
             if (m_ModeSelectPanel) m_ModeSelectPanel.SetActive(m_CurrentState == MenuState.ModeSelect);
-            if (m_Lobby5v5Panel) m_Lobby5v5Panel.SetActive(m_CurrentState == MenuState.Lobby5v5);
-            if (m_Lobby1v1Panel) m_Lobby1v1Panel.SetActive(m_CurrentState == MenuState.Lobby1v1);
+            // Lobby Team cũ chỉ là mockup. Cả 1v1 và 2v2 dùng chung lobby online thật.
+            if (m_Lobby5v5Panel) m_Lobby5v5Panel.SetActive(false);
+            if (m_Lobby1v1Panel) m_Lobby1v1Panel.SetActive(m_CurrentState == MenuState.Lobby1v1 || m_CurrentState == MenuState.Lobby5v5);
             if (m_OfflineMapSelectPanel) m_OfflineMapSelectPanel.SetActive(m_CurrentState == MenuState.OfflineMapSelect);
 
             AudioClip nextClip = null;

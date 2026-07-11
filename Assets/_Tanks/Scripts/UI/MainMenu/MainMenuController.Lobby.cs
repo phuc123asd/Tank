@@ -18,7 +18,7 @@ namespace Tanks.Complete
             var titleRt = CreateElement(panel.transform, "TitleContainer", typeof(RectTransform)).GetComponent<RectTransform>();
             titleRt.anchorMin = titleRt.anchorMax = new Vector2(0.5f, 0.85f);
             titleRt.anchoredPosition = Vector2.zero;
-            CreateShadowedTitle(titleRt.transform, "PHÒNG CHỜ 5v5", 90f);
+            CreateShadowedTitle(titleRt.transform, "PHÒNG CHỜ 2v2", 90f);
 
             // Back button
             var backRt = CreateElement(panel.transform, "BackBtn", typeof(RectTransform)).GetComponent<RectTransform>();

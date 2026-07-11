@@ -71,7 +71,7 @@ namespace Tanks.Complete
             var chatBox = CreateElement(panel.transform, "ChatBox", typeof(RectTransform)).GetComponent<RectTransform>();
             chatBox.anchorMin = chatBox.anchorMax = chatBox.pivot = new Vector2(0, 0);
             chatBox.anchoredPosition = new Vector2(40, 40);
-            CreateCallout(chatBox, "[Thế giới] Tìm pt leo rank 5v5...", new Color(0.15f, 0.15f, 0.15f, 0.8f), 550, 80);
+            CreateCallout(chatBox, "[Thế giới] Tìm đồng đội leo rank 2v2...", new Color(0.15f, 0.15f, 0.15f, 0.8f), 550, 80);
 
             var startBtnRt = CreateElement(panel.transform, "StartBtnContainer", typeof(RectTransform)).GetComponent<RectTransform>();
             startBtnRt.anchorMin = startBtnRt.anchorMax = new Vector2(1f, 0f); // Góc dưới cùng bên phải

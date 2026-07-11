@@ -42,7 +42,7 @@ namespace Tanks.Complete
         public TankManager[] m_SpawnPoints;         // A collection of managers for enabling and disabling different aspects of the tanks.
         
         public NetworkVariable<bool> m_IsControlEnabled = new NetworkVariable<bool>(false);
-        public NetworkVariable<FixedString128Bytes> m_TitleTextSync = new NetworkVariable<FixedString128Bytes>("");
+        public NetworkVariable<FixedString512Bytes> m_TitleTextSync = new NetworkVariable<FixedString512Bytes>("");
         private bool m_GameLoopStarted = false;
 
         // [ONLINE] Trận bị bỏ dở (đối thủ thoát / mất kết nối). Cắt vòng lặp round và về menu.
@@ -141,7 +141,7 @@ namespace Tanks.Complete
             }
         }
 
-        private void OnTitleTextChanged(FixedString128Bytes oldVal, FixedString128Bytes newVal)
+        private void OnTitleTextChanged(FixedString512Bytes oldVal, FixedString512Bytes newVal)
         {
             if (m_TitleText != null)
             {
@@ -358,7 +358,7 @@ namespace Tanks.Complete
             if (nm == null) return false;
 
             var clients = nm.ConnectedClientsList;
-            if (clients.Count < 2) return false;   // 1v1 cần đủ 2 người
+            if (clients.Count < 2) return false;
 
             for (int i = 0; i < clients.Count; i++)
             {
@@ -694,9 +694,25 @@ namespace Tanks.Complete
         }
 
 
-        // This is used to check if there is one or fewer tanks remaining and thus the round should end.
+        private bool IsOnlineTeamMatch => NetworkManager.Singleton != null
+            && NetworkManager.Singleton.IsListening && m_PlayerCount == 4;
+
+        private int AliveInTeam(int team)
+        {
+            int start = team == 0 ? 0 : 2;
+            int end = Mathf.Min(start + 2, m_PlayerCount);
+            int alive = 0;
+            for (int i = start; i < end; i++)
+                if (IsTankAlive(i)) alive++;
+            return alive;
+        }
+
+        // 1v1 kết thúc khi còn <= 1 tank; 2v2 kết thúc khi một đội bị loại hoàn toàn.
         private bool OneTankLeft()
         {
+            if (IsOnlineTeamMatch)
+                return AliveInTeam(0) == 0 || AliveInTeam(1) == 0;
+
             // Start the count of tanks left at zero.
             int numTanksLeft = 0;
 
@@ -717,6 +733,13 @@ namespace Tanks.Complete
         // This function is called with the assumption that 1 or fewer tanks are currently active.
         private TankManager GetRoundWinner()
         {
+            if (IsOnlineTeamMatch)
+            {
+                if (AliveInTeam(0) > 0 && AliveInTeam(1) == 0) return m_SpawnPoints[0];
+                if (AliveInTeam(1) > 0 && AliveInTeam(0) == 0) return m_SpawnPoints[2];
+                return null;
+            }
+
             // Go through all the tanks...
             for (int i = 0; i < m_PlayerCount; i++)
             {
@@ -733,6 +756,13 @@ namespace Tanks.Complete
         // This function is to find out if there is a winner of the game.
         private TankManager GetGameWinner()
         {
+            if (IsOnlineTeamMatch)
+            {
+                if (m_SpawnPoints[0].m_Wins >= m_NumRoundsToWin) return m_SpawnPoints[0];
+                if (m_SpawnPoints[2].m_Wins >= m_NumRoundsToWin) return m_SpawnPoints[2];
+                return null;
+            }
+
             // Go through all the tanks...
             for (int i = 0; i < m_PlayerCount; i++)
             {
@@ -749,6 +779,18 @@ namespace Tanks.Complete
         // Returns a string message to display at the end of each round.
         private string EndMessage()
         {
+            if (IsOnlineTeamMatch)
+            {
+                int blueWins = m_SpawnPoints[0].m_Wins;
+                int redWins = m_SpawnPoints[2].m_Wins;
+                if (m_GameWinner != null)
+                    return m_GameWinner == m_SpawnPoints[0] ? "ĐỘI XANH THẮNG TRẬN!" : "ĐỘI ĐỎ THẮNG TRẬN!";
+
+                string result = m_RoundWinner == null ? "HÒA!" :
+                    (m_RoundWinner == m_SpawnPoints[0] ? "ĐỘI XANH THẮNG ROUND!" : "ĐỘI ĐỎ THẮNG ROUND!");
+                return $"{result}\n\nĐỘI XANH: {blueWins}  -  ĐỘI ĐỎ: {redWins}";
+            }
+
             // By default when a round ends there are no winners so the default end message is a draw.
             string message = "DRAW!";
 

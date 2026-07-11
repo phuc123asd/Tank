@@ -26,10 +26,15 @@ namespace Tanks.Complete
         private TMP_InputField m_JoinCodeInput;
         private TextMeshProUGUI m_CodeLabel;
         private TextMeshProUGUI m_Lobby1v1Status;
-        private readonly TextMeshProUGUI[] m_SlotNames = new TextMeshProUGUI[2];
-        private readonly TextMeshProUGUI[] m_SlotStateLabels = new TextMeshProUGUI[2];
-        private readonly Image[] m_SlotFills = new Image[2];
-        private readonly Image[] m_SlotThumbs = new Image[2];
+        private const int k_MaxOnlinePlayers = 4;
+        private readonly TextMeshProUGUI[] m_SlotNames = new TextMeshProUGUI[k_MaxOnlinePlayers];
+        private readonly TextMeshProUGUI[] m_SlotStateLabels = new TextMeshProUGUI[k_MaxOnlinePlayers];
+        private readonly Image[] m_SlotFills = new Image[k_MaxOnlinePlayers];
+        private readonly Image[] m_SlotThumbs = new Image[k_MaxOnlinePlayers];
+        private readonly GameObject[] m_RoomSlots = new GameObject[k_MaxOnlinePlayers];
+        private TextMeshProUGUI m_OnlineLobbyTitle;
+        private TextMeshProUGUI m_VsLabel;
+        private bool m_IsTeam2v2;
         private readonly Image[] m_MapPickFills = new Image[3];
         private RectTransform m_WaitingRadarRt;
         private GameObject m_HostControls;   // Chọn map + nút Bắt đầu (chỉ Chủ phòng thấy)
@@ -92,6 +97,7 @@ namespace Tanks.Complete
             titleRt.anchorMin = titleRt.anchorMax = new Vector2(0.5f, 0.88f);
             titleRt.anchoredPosition = Vector2.zero;
             CreateShadowedTitle(titleRt.transform, "ĐẤU TRƯỜNG 1v1", 80f);
+            m_OnlineLobbyTitle = titleRt.GetComponentInChildren<TextMeshProUGUI>();
 
             // Nút quay lại / rời phòng
             var backRt = CreateElement(panel.transform, "BackBtn", typeof(RectTransform)).GetComponent<RectTransform>();
@@ -195,17 +201,14 @@ namespace Tanks.Complete
             CreatePillButton(copyHolder, "SAO CHÉP", m_CardColor2, 160, 70, 22, OnCopyCodeClicked);
 
             // 2. Hai bay đối đầu: bên đã vào phòng là LOCKED, bên còn lại là silhouette đang quét.
-            var slot0 = CreateRoomSlot(view, 0);
-            slot0.GetComponent<RectTransform>().anchoredPosition = new Vector2(-420, 70);
+            for (int i = 0; i < k_MaxOnlinePlayers; i++)
+                m_RoomSlots[i] = CreateRoomSlot(view, i);
             
             var vsRt = CreateElement(view, "VSLabel", typeof(RectTransform)).GetComponent<RectTransform>();
             vsRt.anchorMin = vsRt.anchorMax = vsRt.pivot = new Vector2(0.5f, 0.5f);
             vsRt.sizeDelta = new Vector2(200, 100);
             vsRt.anchoredPosition = new Vector2(0, 70);
-            CreateTMP(vsRt, "VS", "VS", 100, FontStyles.Bold | FontStyles.Italic, m_PlayButtonColor, TextAlignmentOptions.Center);
-            
-            var slot1 = CreateRoomSlot(view, 1);
-            slot1.GetComponent<RectTransform>().anchoredPosition = new Vector2(420, 70);
+            m_VsLabel = CreateTMP(vsRt, "VS", "VS", 100, FontStyles.Bold | FontStyles.Italic, m_PlayButtonColor, TextAlignmentOptions.Center);
 
             // 3. Khu điều khiển của Chủ phòng (Nằm gọn dưới đáy Y = 0)
             var host = CreateElement(view, "HostControls", typeof(RectTransform)).GetComponent<RectTransform>();
@@ -246,6 +249,7 @@ namespace Tanks.Complete
             m_WaitingLabelGo = waitRt.gameObject;
 
             SelectMap(m_SelectedMap);
+            ApplyOnlineModeLayout();
         }
 
         private GameObject CreateRoomSlot(Transform parent, int index)
@@ -253,7 +257,7 @@ namespace Tanks.Complete
             var slotGo = CreateElement(parent, $"Slot_{index}", typeof(RectTransform));
             var rt = slotGo.GetComponent<RectTransform>();
             rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
-            rt.sizeDelta = new Vector2(340, 430);
+            rt.sizeDelta = new Vector2(300, 390);
 
             CreateShadow(slotGo.transform, 96, 32, new Vector2(12, -14), new Vector2(12, -14), 0.30f);
 
@@ -489,7 +493,8 @@ namespace Tanks.Complete
             SetLobbyStatus("Đang tạo phòng...");
             try
             {
-                await mgr.CreateLobbyAsync("Phòng 1v1", 2);
+                int playerCount = RequiredOnlinePlayers;
+                await mgr.CreateLobbyAsync(m_IsTeam2v2 ? "Phòng 2v2" : "Phòng 1v1", playerCount);
                 Debug.Log("[Lobby1v1] CreateLobbyAsync hoàn tất.");
             }
             catch (System.Exception e)
@@ -528,9 +533,10 @@ namespace Tanks.Complete
                 SetLobbyStatus("Chỉ chủ phòng mới bắt đầu được trận đấu.");
                 return;
             }
-            if (NetworkManager.Singleton.ConnectedClientsList.Count < 2)
+            int requiredPlayers = RequiredOnlinePlayers;
+            if (NetworkManager.Singleton.ConnectedClientsList.Count < requiredPlayers)
             {
-                SetLobbyStatus("Cần đủ 2 người chơi mới bắt đầu được.");
+                SetLobbyStatus($"Cần đủ {requiredPlayers} người chơi mới bắt đầu được.");
                 return;
             }
             SetLobbyStatus($"Đang tải bản đồ {m_SelectedMap}...");
@@ -634,15 +640,18 @@ namespace Tanks.Complete
 
             if (m_HostControls != null) m_HostControls.SetActive(isHost);
             if (m_WaitingLabelGo != null) m_WaitingLabelGo.SetActive(!isHost);
-            if (m_StartMatchButton != null) m_StartMatchButton.interactable = isHost && connected >= 2;
+            int requiredPlayers = RequiredOnlinePlayers;
+            if (m_StartMatchButton != null) m_StartMatchButton.interactable = isHost && connected >= requiredPlayers;
 
-            SetDefaultStatus(connected >= 2 ? "Hai bên đã khóa lựa chọn. Sẵn sàng chiến đấu." : "Đã khóa lựa chọn. Đang chờ đối thủ...");
+            SetDefaultStatus(connected >= requiredPlayers
+                ? (m_IsTeam2v2 ? "Hai đội đã đủ người. Sẵn sàng chiến đấu." : "Hai bên đã đủ người. Sẵn sàng chiến đấu.")
+                : $"Đang chờ người chơi... ({connected}/{requiredPlayers})");
         }
 
         // RefreshRoom chạy mỗi frame. LoadSpriteWithFallback có thể gọi Sprite.Create, nên nạp lại
         // avatar vô điều kiện sẽ sinh một Sprite mới mỗi frame. Chỉ chạm vào UI khi dữ liệu đổi.
-        private readonly string[] m_SlotAppliedAvatar = new string[2];
-        private readonly string[] m_SlotAppliedName = new string[2];
+        private readonly string[] m_SlotAppliedAvatar = new string[k_MaxOnlinePlayers];
+        private readonly string[] m_SlotAppliedName = new string[k_MaxOnlinePlayers];
 
         private void ApplySlotVisuals(int i, bool filled, string displayName, string avatarId)
         {
@@ -655,7 +664,7 @@ namespace Tanks.Complete
 
             if (m_SlotFills[i] != null)
             {
-                Color filledColor = i == 0 ? m_PlayButtonColor : m_CyanColor;
+                Color filledColor = i < 2 ? m_CyanColor : m_CardColor1;
                 m_SlotFills[i].color = filled ? filledColor : new Color(0.15f, 0.15f, 0.15f, 0.8f);
 
                 if (m_SlotThumbs[i] != null)
@@ -722,10 +731,41 @@ namespace Tanks.Complete
         private void Update()
         {
             TryHookEvents();
-            if (m_CurrentState == MenuState.Lobby1v1 && m_WaitingRadarRt != null && m_WaitingRadarRt.gameObject.activeInHierarchy)
+            bool inOnlineLobby = m_CurrentState == MenuState.Lobby1v1 || m_CurrentState == MenuState.Lobby5v5;
+            if (inOnlineLobby && m_WaitingRadarRt != null && m_WaitingRadarRt.gameObject.activeInHierarchy)
                 m_WaitingRadarRt.Rotate(Vector3.forward, -110f * Time.unscaledDeltaTime);
 
-            if (m_CurrentState == MenuState.Lobby1v1) RefreshLobby();
+            if (inOnlineLobby) RefreshLobby();
+        }
+
+        private int RequiredOnlinePlayers => m_IsTeam2v2 ? 4 : 2;
+
+        private void SetOnlineMode(bool team2v2)
+        {
+            m_IsTeam2v2 = team2v2;
+            ApplyOnlineModeLayout();
+        }
+
+        private void ApplyOnlineModeLayout()
+        {
+            if (m_OnlineLobbyTitle != null)
+                m_OnlineLobbyTitle.text = m_IsTeam2v2 ? "ĐẤU ĐỘI 2v2" : "ĐẤU TRƯỜNG 1v1";
+            if (m_VsLabel != null)
+                m_VsLabel.text = m_IsTeam2v2 ? "TEAM\nVS\nTEAM" : "VS";
+
+            float[] teamXs = { -510f, -180f, 180f, 510f };
+            for (int i = 0; i < m_RoomSlots.Length; i++)
+            {
+                if (m_RoomSlots[i] == null) continue;
+                bool visible = m_IsTeam2v2 || i < 2;
+                m_RoomSlots[i].SetActive(visible);
+                if (!visible) continue;
+
+                var rt = m_RoomSlots[i].GetComponent<RectTransform>();
+                rt.anchoredPosition = m_IsTeam2v2
+                    ? new Vector2(teamXs[i], 70f)
+                    : new Vector2(i == 0 ? -420f : 420f, 70f);
+            }
         }
 
         private void OnDestroy()
