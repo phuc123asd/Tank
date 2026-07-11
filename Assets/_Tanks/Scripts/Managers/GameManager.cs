@@ -214,6 +214,57 @@ namespace Tanks.Complete
             return closestDistance <= 0.01f ? closest : null;
         }
 
+        // =====================================================================
+        //  [ONLINE] Áp hiệu ứng power-up theo authority
+        // =====================================================================
+        // Gọi trên SERVER khi một tank nhặt power-up. Broadcast tới MỌI máy để mỗi máy áp hiệu ứng
+        // lên bản tank cục bộ của mình. Nhờ đó component đúng authority tự có tác dụng:
+        //  - owner: tốc độ (TankMovement), cooldown/đạn đặc biệt (TankShooting)
+        //  - server: máu/khiên/bất tử (TankHealth)
+        // và HUD hiện ở mọi máy.
+        public void ApplyPowerUpToTank(NetworkObject tankObject, int powerUpType, float value1, float value2, float duration)
+        {
+            if (!IsServer || tankObject == null) return;
+            ApplyPowerUpClientRpc(tankObject.NetworkObjectId, powerUpType, value1, value2, duration);
+        }
+
+        [ClientRpc]
+        private void ApplyPowerUpClientRpc(ulong tankNetworkObjectId, int powerUpType, float value1, float value2, float duration)
+        {
+            if (NetworkManager.Singleton == null) return;
+            if (!NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(tankNetworkObjectId, out var netObj) || netObj == null)
+                return;
+
+            var detector = netObj.GetComponent<PowerUpDetector>();
+            if (detector != null)
+                detector.ApplyNetworkedPowerUp((PowerUp.PowerUpType)powerUpType, value1, value2, duration);
+        }
+
+        // =====================================================================
+        //  [ONLINE] Hiệu ứng nổ đạn đồng bộ
+        // =====================================================================
+        // Gọi trên SERVER (host đã tự phát VFX cục bộ). Bảo các client còn lại phát VFX/âm thanh nổ
+        // đúng vị trí server tính, trước khi đạn bị despawn -> hết cảnh nổ chập chờn / lệch chỗ.
+        public void PlayShellExplosion(ulong shellNetworkObjectId, Vector3 position)
+        {
+            if (!IsServer) return;
+            PlayShellExplosionClientRpc(shellNetworkObjectId, position);
+        }
+
+        [ClientRpc]
+        private void PlayShellExplosionClientRpc(ulong shellNetworkObjectId, Vector3 position)
+        {
+            if (IsServer) return;   // host đã phát cục bộ trong ShellExplosion.Explode
+
+            if (NetworkManager.Singleton != null &&
+                NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(shellNetworkObjectId, out var netObj) && netObj != null)
+            {
+                var shell = netObj.GetComponent<ShellExplosion>();
+                if (shell != null)
+                    shell.PlayNetworkedExplosionEffect(position);
+            }
+        }
+
         private GameState m_CurrentState;
         
         private int m_RoundNumber;                  // Which round the game is currently on.
@@ -329,6 +380,30 @@ namespace Tanks.Complete
             }
         }
 
+        // Màu tương ứng với xe index 0..3. Lấy đúng màu slot mà người chơi đã thấy ở menu chọn xe
+        // (StartMenuSlot.m_SlotColor) để màu trong trận khớp với lúc chọn. Có palette dự phòng nếu
+        // không tìm được GameUIHandler.
+        private static readonly Color[] k_FallbackTankColors =
+        {
+            new Color(0.20f, 0.45f, 0.95f),   // xanh dương
+            new Color(0.95f, 0.30f, 0.25f),   // đỏ
+            new Color(0.30f, 0.80f, 0.35f),   // xanh lá
+            new Color(0.95f, 0.80f, 0.20f),   // vàng
+        };
+
+        private Color GetTankColorByIndex(int index)
+        {
+            var ui = FindAnyObjectByType<GameUIHandler>(FindObjectsInactive.Include);
+            if (ui != null && ui.m_PlayerSlots != null &&
+                index >= 0 && index < ui.m_PlayerSlots.Length &&
+                ui.m_PlayerSlots[index] != null)
+            {
+                return ui.m_PlayerSlots[index].m_SlotColor;
+            }
+
+            return k_FallbackTankColors[Mathf.Clamp(index, 0, k_FallbackTankColors.Length - 1)];
+        }
+
 
         private void Update()
         {
@@ -357,12 +432,16 @@ namespace Tanks.Complete
         // Xe mà server đã báo nhưng NetworkObject chưa kịp spawn xong trên máy này.
         private readonly Dictionary<ulong, int> m_PendingSlots = new Dictionary<ulong, int>();
 
+        // [ONLINE] Màu tank server gửi kèm slot để client tô đúng màu người chơi đã chọn ở menu.
+        private readonly Dictionary<ulong, Color> m_PendingColors = new Dictionary<ulong, Color>();
+
         [ClientRpc]
-        private void AssignTankSlotClientRpc(ulong networkObjectId, int slot)
+        private void AssignTankSlotClientRpc(ulong networkObjectId, int slot, Color playerColor)
         {
             if (IsServer) return;   // server đã tự gán khi spawn
 
             m_PendingSlots[networkObjectId] = slot;
+            m_PendingColors[networkObjectId] = playerColor;
             ResolvePendingSlots();
         }
 
@@ -387,6 +466,9 @@ namespace Tanks.Complete
                 m_SpawnPoints[slot].m_PlayerNumber = slot + 1;
                 m_SpawnPoints[slot].ControlIndex = -1;
                 m_SpawnPoints[slot].m_ComputerControlled = false;
+                // Tô đúng màu người chơi đã chọn trước khi Setup (Setup mới đọc m_PlayerColor để tint material).
+                if (m_PendingColors.TryGetValue(pending.Key, out var pendingColor))
+                    m_SpawnPoints[slot].m_PlayerColor = pendingColor;
                 m_SpawnPoints[slot].Setup(this);
 
                 // Make sure the newly discovered tank obeys the current control state
@@ -399,7 +481,10 @@ namespace Tanks.Complete
             }
 
             foreach (var id in m_ResolvedIds)
+            {
                 m_PendingSlots.Remove(id);
+                m_PendingColors.Remove(id);
+            }
         }
 
         private readonly List<ulong> m_ResolvedIds = new List<ulong>();
@@ -446,6 +531,8 @@ namespace Tanks.Complete
                 // Dùng xe mà chính máy đó đã chọn; nếu thiếu (fallback) thì theo thứ tự slot.
                 int choice = m_ClientTankChoice.TryGetValue(clientId, out var picked) ? picked : i;
                 GameObject tankPrefab = GetTankPrefabByIndex(choice);
+                // Màu người chơi thấy ở menu chính là màu slot của xe đã chọn -> dùng lại để vào trận khớp màu.
+                Color tankColor = GetTankColorByIndex(choice);
                 Debug.Log($"[GameManager] Spawn tank cho client {clientId} bằng prefab '{tankPrefab.name}' (index {choice}).");
 
                 GameObject tankInstance = Instantiate(tankPrefab, m_SpawnPoints[i].m_SpawnPoint.position, m_SpawnPoints[i].m_SpawnPoint.rotation);
@@ -456,10 +543,11 @@ namespace Tanks.Complete
                 m_SpawnPoints[i].m_PlayerNumber = i + 1;
                 m_SpawnPoints[i].ControlIndex = -1;
                 m_SpawnPoints[i].m_ComputerControlled = false;
+                m_SpawnPoints[i].m_PlayerColor = tankColor;   // gán trước vòng Setup bên dưới
 
                 // Clients cannot infer the slot from OwnerClientId — that only matches while the
                 // host happens to be first in ConnectedClientsList. Send the authoritative index.
-                AssignTankSlotClientRpc(netObj.NetworkObjectId, i);
+                AssignTankSlotClientRpc(netObj.NetworkObjectId, i, tankColor);
             }
 
             foreach (var tank in m_SpawnPoints)

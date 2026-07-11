@@ -1,4 +1,5 @@
 using UnityEngine;
+using Unity.Netcode;
 
 namespace Tanks.Complete
 {
@@ -46,44 +47,105 @@ namespace Tanks.Complete
 
         private void OnTriggerEnter(Collider other)
         {
-            if (other.gameObject.layer == LayerMask.NameToLayer("Players"))
+            if (other.gameObject.layer != LayerMask.NameToLayer("Players"))
+                return;
+
+            // Reference to the PowerUpDetector component of the tank.
+            PowerUpDetector detector = other.gameObject.GetComponent<PowerUpDetector>();
+            if (detector == null)
+                return;
+
+            bool isOnline = NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening;
+
+            // [ONLINE] Chỉ server xử lý việc nhặt để áp hiệu ứng theo authority. Client bỏ qua trigger
+            // cục bộ, tránh áp hiệu ứng vào bản tank không có quyền (đó chính là lý do trước đây nhặt
+            // xong không có tác dụng gì).
+            if (isOnline && !NetworkManager.Singleton.IsServer)
+                return;
+
+            // Checks that the tank has not picked up other power up
+            if (detector.m_HasActivePowerUp)
+                return;
+
+            if (isOnline)
             {
-                // Reference to the PowerUpDetector component of the tank.
-                PowerUpDetector m_PowerUpDetector = other.gameObject.GetComponent<PowerUpDetector>();
-
-                // Checks that the tank has not picked up other power up
-                if (!m_PowerUpDetector.m_HasActivePowerUp)
+                // Server broadcast để MỌI máy áp hiệu ứng cho bản tank cục bộ của mình.
+                var tankNetObj = other.gameObject.GetComponent<NetworkObject>();
+                var gameManager = FindAnyObjectByType<GameManager>();
+                if (tankNetObj != null && gameManager != null)
                 {
-                    // The power up reduces is a shield
-                    if (m_PowerUpType == PowerUpType.DamageReduction)
-                        m_PowerUpDetector.PickUpShield(m_DamageReduction, m_DurationTime);
-                    // The power up enhances any speed stat
-                    else if (m_PowerUpType == PowerUpType.Speed)
-                        m_PowerUpDetector.PowerUpSpeed(m_SpeedBonus, m_TurnSpeedBonus, m_DurationTime);
-                    // The power up enhances any shooting stat
-                    else if (m_PowerUpType == PowerUpType.ShootingBonus)
-                        m_PowerUpDetector.PowerUpShoootingRate(m_CooldownReduction, m_DurationTime);
-                    // The power up heals the tank
-                    else if (m_PowerUpType == PowerUpType.Healing)
-                        m_PowerUpDetector.PowerUpHealing(m_HealingAmount);
-                    // The power up makes the tank invincible
-                    else if (m_PowerUpType == PowerUpType.Invincibility)
-                        m_PowerUpDetector.PowerUpInvincibility(m_DurationTime);
-                    // The power up increases the damage of the shell
-                    else if (m_PowerUpType == PowerUpType.DamageMultiplier)
-                        m_PowerUpDetector.PowerUpSpecialShell(m_DamageMultiplier);
-
-                    // Tells the spawner that the power up has been collected
-                    if (m_Spawner != null)
-                        m_Spawner.CollectPowerUp();
-
-                    // Instantiates the PowerUp weffects
-                    if (m_CollectFX != null)
-                        Instantiate(m_CollectFX, transform.position, Quaternion.identity);
-
-                    // Destroys the Power Up
-                    Destroy(gameObject);
+                    GetNetworkedValues(out float value1, out float value2);
+                    gameManager.ApplyPowerUpToTank(tankNetObj, (int)m_PowerUpType, value1, value2, m_DurationTime);
                 }
+            }
+            else
+            {
+                ApplyOffline(detector);
+            }
+
+            // Tells the spawner that the power up has been collected
+            if (m_Spawner != null)
+                m_Spawner.CollectPowerUp();
+
+            // Instantiates the PowerUp effects
+            if (m_CollectFX != null)
+                Instantiate(m_CollectFX, transform.position, Quaternion.identity);
+
+            // Destroys the Power Up (bản cục bộ; các máy khác bị hủy qua broadcast respawn)
+            Destroy(gameObject);
+        }
+
+        // Áp hiệu ứng trực tiếp (chế độ offline, tank cục bộ luôn là bản có authority).
+        private void ApplyOffline(PowerUpDetector detector)
+        {
+            switch (m_PowerUpType)
+            {
+                case PowerUpType.DamageReduction:
+                    detector.PickUpShield(m_DamageReduction, m_DurationTime);
+                    break;
+                case PowerUpType.Speed:
+                    detector.PowerUpSpeed(m_SpeedBonus, m_TurnSpeedBonus, m_DurationTime);
+                    break;
+                case PowerUpType.ShootingBonus:
+                    detector.PowerUpShoootingRate(m_CooldownReduction, m_DurationTime);
+                    break;
+                case PowerUpType.Healing:
+                    detector.PowerUpHealing(m_HealingAmount);
+                    break;
+                case PowerUpType.Invincibility:
+                    detector.PowerUpInvincibility(m_DurationTime);
+                    break;
+                case PowerUpType.DamageMultiplier:
+                    detector.PowerUpSpecialShell(m_DamageMultiplier);
+                    break;
+            }
+        }
+
+        // Gom 2 giá trị cần gửi qua mạng theo từng loại power-up (khớp với ApplyNetworkedPowerUp).
+        private void GetNetworkedValues(out float value1, out float value2)
+        {
+            value1 = 0f;
+            value2 = 0f;
+            switch (m_PowerUpType)
+            {
+                case PowerUpType.Speed:
+                    value1 = m_SpeedBonus;
+                    value2 = m_TurnSpeedBonus;
+                    break;
+                case PowerUpType.DamageReduction:
+                    value1 = m_DamageReduction;
+                    break;
+                case PowerUpType.ShootingBonus:
+                    value1 = m_CooldownReduction;
+                    break;
+                case PowerUpType.Healing:
+                    value1 = m_HealingAmount;
+                    break;
+                case PowerUpType.DamageMultiplier:
+                    value1 = m_DamageMultiplier;
+                    break;
+                case PowerUpType.Invincibility:
+                    break;
             }
         }
 

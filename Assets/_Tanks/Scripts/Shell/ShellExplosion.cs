@@ -30,11 +30,11 @@ namespace Tanks.Complete
 
         private void Start ()
         {
-            // If it isn't destroyed by then, destroy the shell after its lifetime.
-            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
+            // Hết thời gian sống thì cho đạn nổ. Offline: mọi máy tự xử lý. Online: chỉ server đặt hẹn
+            // (Explode sẽ despawn + broadcast VFX), tránh client tự Destroy NetworkObject của server.
+            bool isOffline = NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening;
+            if (isOffline || NetworkManager.Singleton.IsServer)
                 Invoke(nameof(ExplodeFromLifetime), m_MaxLifeTime);
-            else
-                Destroy (gameObject, m_MaxLifeTime);
         }
 
 
@@ -51,50 +51,64 @@ namespace Tanks.Complete
 
         private void ExplodeFromLifetime()
         {
-            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
-                Explode();
+            // Explode() tự lọc authority (offline hoặc server). Client online sẽ không tới đây vì
+            // không đặt hẹn ở Start.
+            Explode();
         }
 
         private void Explode()
         {
-            Collider[] colliders = Physics.OverlapSphere (transform.position, m_ExplosionRadius, m_TankMask);
             bool isOffline = NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening;
+
+            // [ONLINE] Chỉ server mới được kích nổ (tính damage + phát VFX đồng bộ). Client bỏ qua
+            // trigger cục bộ để tránh nổ lệch vị trí / lệch thời điểm, và tránh despawn đạn của server.
+            if (!isOffline && !NetworkManager.Singleton.IsServer)
+                return;
+
             if (m_Exploded) return;
             m_Exploded = true;
 
-            if (isOffline || NetworkManager.Singleton.IsServer)
+            Collider[] colliders = Physics.OverlapSphere (transform.position, m_ExplosionRadius, m_TankMask);
+            for (int i = 0; i < colliders.Length; i++)
             {
-                for (int i = 0; i < colliders.Length; i++)
+                Rigidbody targetRigidbody = colliders[i].GetComponent<Rigidbody> ();
+                if (!targetRigidbody)
+                    continue;
+
+                float damage = CalculateDamage (targetRigidbody.position);
+                TankMovement targetMovement = targetRigidbody.GetComponent<TankMovement>();
+                if (targetMovement != null)
+                    targetMovement.AddExplosionForce(m_ExplosionForce, transform.position, m_ExplosionRadius);
+
+                if (isOffline)
                 {
-                    Rigidbody targetRigidbody = colliders[i].GetComponent<Rigidbody> ();
-                    if (!targetRigidbody)
-                        continue;
-
-                    float damage = CalculateDamage (targetRigidbody.position);
-                    TankMovement targetMovement = targetRigidbody.GetComponent<TankMovement>();
-                    if (targetMovement != null)
-                        targetMovement.AddExplosionForce(m_ExplosionForce, transform.position, m_ExplosionRadius);
-
-                    if (isOffline)
+                    OfflineTankHealthController offlineHealth = targetRigidbody.GetComponent<OfflineTankHealthController>();
+                    if (offlineHealth != null)
                     {
-                        OfflineTankHealthController offlineHealth = targetRigidbody.GetComponent<OfflineTankHealthController>();
-                        if (offlineHealth != null)
-                        {
-                            offlineHealth.TakeDamage(damage);
-                            continue;
-                        }
+                        offlineHealth.TakeDamage(damage);
+                        continue;
                     }
-
-                    TankHealth targetHealth = targetRigidbody.GetComponent<TankHealth> ();
-                    if (targetHealth != null)
-                        targetHealth.TakeDamage (damage);
                 }
+
+                TankHealth targetHealth = targetRigidbody.GetComponent<TankHealth> ();
+                if (targetHealth != null)
+                    targetHealth.TakeDamage (damage);
             }
 
             if (isOffline)
+            {
                 PlayOfflineExplosionPrefabEffect();
+            }
             else
-                PlayOnlineExplosionEffect();
+            {
+                // Host phát VFX cục bộ ngay, rồi bảo các client còn lại phát trước khi đạn despawn.
+                PlayNetworkedExplosionEffect(transform.position);
+
+                var gm = GetGameManager();
+                NetworkObject networkObject = GetComponent<NetworkObject>();
+                if (gm != null && networkObject != null)
+                    gm.PlayShellExplosion(networkObject.NetworkObjectId, transform.position);
+            }
 
             if (CameraControl.Instance != null)
                 CameraControl.Instance.Shake(0.22f, 0.35f);
@@ -103,14 +117,23 @@ namespace Tanks.Complete
             {
                 Destroy(gameObject);
             }
-            else if (NetworkManager.Singleton.IsServer)
+            else
             {
                 NetworkObject networkObject = GetComponent<NetworkObject>();
-                if (networkObject != null)
+                if (networkObject != null && networkObject.IsSpawned)
                     networkObject.Despawn();
                 else
                     Destroy(gameObject);
             }
+        }
+
+        private static GameManager s_GameManager;
+        private static GameManager GetGameManager()
+        {
+            // == null cũng đúng cho object Unity đã bị destroy -> tự tìm lại sau khi đổi scene.
+            if (s_GameManager == null)
+                s_GameManager = FindAnyObjectByType<GameManager>();
+            return s_GameManager;
         }
 
         private void PlayOfflineExplosionPrefabEffect()
@@ -147,19 +170,37 @@ namespace Tanks.Complete
             return particles;
         }
 
-        private void PlayOnlineExplosionEffect()
+        // Phát VFX + âm thanh nổ tại vị trí server tính. Tách khỏi đạn (unparent) để không bị hủy
+        // theo đạn khi server despawn. Gọi trên MỌI máy (host cục bộ + client qua ClientRpc).
+        public void PlayNetworkedExplosionEffect(Vector3 position)
         {
+            float life = 1f;
+
+            if (m_ExplosionParticles != null)
+            {
+                ParticleSystem.MainModule mainModule = m_ExplosionParticles.main;
+                life = Mathf.Max(life, mainModule.duration + mainModule.startLifetime.constantMax);
+            }
+            if (m_ExplosionAudio != null && m_ExplosionAudio.clip != null)
+                life = Mathf.Max(life, m_ExplosionAudio.clip.length);
+
             if (m_ExplosionParticles != null)
             {
                 m_ExplosionParticles.transform.parent = null;
+                m_ExplosionParticles.transform.position = position;
                 m_ExplosionParticles.Play();
-
-                ParticleSystem.MainModule mainModule = m_ExplosionParticles.main;
-                Destroy(m_ExplosionParticles.gameObject, mainModule.duration);
+                Destroy(m_ExplosionParticles.gameObject, life);
             }
 
             if (m_ExplosionAudio != null)
+            {
+                m_ExplosionAudio.transform.parent = null;
+                m_ExplosionAudio.transform.position = position;
                 m_ExplosionAudio.Play();
+                // Nếu audio nằm chung GameObject với particle thì đã được hủy ở trên; chỉ hủy khi khác object.
+                if (m_ExplosionParticles == null || m_ExplosionAudio.gameObject != m_ExplosionParticles.gameObject)
+                    Destroy(m_ExplosionAudio.gameObject, life);
+            }
         }
 
 

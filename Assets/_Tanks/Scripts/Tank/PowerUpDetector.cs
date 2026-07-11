@@ -22,6 +22,33 @@ namespace Tanks.Complete
             m_PowerUpHUD = GetComponentInChildren<PowerUpHUD>();
         }
 
+        // [ONLINE] Điểm vào duy nhất khi áp power-up qua mạng. GameManager broadcast tới mọi máy,
+        // mỗi máy gọi hàm này cho bản tank cục bộ -> hiệu ứng đúng authority tự có tác dụng.
+        public void ApplyNetworkedPowerUp(PowerUp.PowerUpType type, float value1, float value2, float duration)
+        {
+            switch (type)
+            {
+                case PowerUp.PowerUpType.Speed:
+                    PowerUpSpeed(value1, value2, duration);
+                    break;
+                case PowerUp.PowerUpType.DamageReduction:
+                    PickUpShield(value1, duration);
+                    break;
+                case PowerUp.PowerUpType.ShootingBonus:
+                    PowerUpShoootingRate(value1, duration);
+                    break;
+                case PowerUp.PowerUpType.Healing:
+                    PowerUpHealing(value1);
+                    break;
+                case PowerUp.PowerUpType.Invincibility:
+                    PowerUpInvincibility(duration);
+                    break;
+                case PowerUp.PowerUpType.DamageMultiplier:
+                    PowerUpSpecialShell(value1);
+                    break;
+            }
+        }
+
         // Applies a temporary speed boost to the tank
         public void PowerUpSpeed(float speedBoost, float turnSpeedBoost, float duration)
         {
