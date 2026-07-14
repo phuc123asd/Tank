@@ -6,6 +6,7 @@ using Unity.Netcode;
 using Unity.Collections;
 using UnityEngine.SceneManagement;
 using UnityEngine.Serialization;
+using Tanks.Backend;
 
 namespace Tanks.Complete
 {
@@ -40,6 +41,10 @@ namespace Tanks.Complete
         
         [FormerlySerializedAs("m_Tanks")] 
         public TankManager[] m_SpawnPoints;         // A collection of managers for enabling and disabling different aspects of the tanks.
+
+        [Header("Spawn Layouts")]
+        [SerializeField] private Transform[] m_DuelSpawnPoints = new Transform[2];
+        [SerializeField] private Transform[] m_TeamSpawnPoints = new Transform[4];
         
         public NetworkVariable<bool> m_IsControlEnabled = new NetworkVariable<bool>(false);
         public NetworkVariable<FixedString512Bytes> m_TitleTextSync = new NetworkVariable<FixedString512Bytes>("");
@@ -53,13 +58,28 @@ namespace Tanks.Complete
         // Mỗi máy chỉ chọn xe của riêng mình rồi gửi lên server qua SubmitTankChoiceRpc.
         private readonly Dictionary<ulong, int> m_ClientTankChoice = new Dictionary<ulong, int>();
 
+        // Roster online do server chốt một lần khi vào map. Mọi hệ thống (spawn, màu, damage,
+        // round và disconnect) đều đọc cùng mapping này, không suy lại từ danh sách client hiện tại.
+        private readonly Dictionary<ulong, int> m_ClientTeams = new Dictionary<ulong, int>();
+        private readonly Dictionary<ulong, int> m_ClientSlots = new Dictionary<ulong, int>();
+        private bool m_OnlineTeamMatch;
+        private int m_ForcedWinningTeam = -1;
+
+        private const int k_TeamSize = 2;
+        private const int k_TeamPlayerCount = 4;
+        private static readonly Color k_BlueTeamColor = new Color(0.10f, 0.55f, 1.00f, 1f);
+        private static readonly Color k_RedTeamColor = new Color(1.00f, 0.22f, 0.16f, 1f);
+
         public override void OnNetworkSpawn()
         {
             m_IsControlEnabled.OnValueChanged += OnControlEnabledChanged;
             m_TitleTextSync.OnValueChanged += OnTitleTextChanged;
 
             if (IsServer && NetworkManager.Singleton != null)
+            {
+                InitializeOnlineRoster();
                 NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnectedFromMatch;
+            }
 
             OnControlEnabledChanged(false, m_IsControlEnabled.Value);
             OnTitleTextChanged("", m_TitleTextSync.Value);
@@ -79,18 +99,80 @@ namespace Tanks.Complete
         //  [ONLINE] Đối thủ thoát giữa chừng / kết thúc trận
         // =====================================================================
 
-        // Chỉ chạy trên server. Một máy rời trận -> 1v1 không còn ý nghĩa, đưa cả hai về menu.
+        // 2v2 đang chơi tiếp tục dưới dạng 2v1. Nếu thiếu người trước khi spawn thì dừng có kiểm
+        // soát để không rơi vào trạng thái 3 người/free-for-all. 1v1 vẫn kết thúc khi một bên rời.
         private void OnClientDisconnectedFromMatch(ulong clientId)
         {
             if (!IsServer || m_MatchAborted || NetworkManager.Singleton == null) return;
             if (clientId == NetworkManager.Singleton.LocalClientId) return;   // chính server tắt
 
             m_ClientTankChoice.Remove(clientId);
-            m_MatchAborted = true;
-            Debug.Log($"[GameManager] Client {clientId} rời trận -> kết thúc trận đấu.");
 
-            SetTitleText("ĐỐI THỦ ĐÃ RỜI TRẬN");
+            if (!m_GameLoopStarted)
+            {
+                AbortOnlineMatch("KHÔNG ĐỦ NGƯỜI - TRẬN ĐẤU ĐÃ HỦY");
+                return;
+            }
+
+            if (!IsOnlineTeamMatch || !m_ClientTeams.TryGetValue(clientId, out int departedTeam))
+            {
+                AbortOnlineMatch("ĐỐI THỦ ĐÃ RỜI TRẬN");
+                return;
+            }
+
+            if (m_ClientSlots.TryGetValue(clientId, out int slot) && slot >= 0 && slot < m_SpawnPoints.Length)
+                m_SpawnPoints[slot].m_Instance = null;
+
+            SetCameraTargets();
+            int teammatesLeft = ConnectedPlayersInTeam(departedTeam, clientId);
+            if (teammatesLeft > 0)
+            {
+                string message = departedTeam == 0
+                    ? "ĐỘI XANH CÒN 1 NGƯỜI"
+                    : "ĐỘI ĐỎ CÒN 1 NGƯỜI";
+                Debug.Log($"[GameManager] Client {clientId} rời trận; tiếp tục 2v1.");
+                ShowTemporaryTitle(message, 2f);
+                return;
+            }
+
+            // Cả đội đã rời: kết thúc ngay trận hiện tại và trao chiến thắng cho đội còn lại.
+            m_ForcedWinningTeam = 1 - departedTeam;
+            TankManager winningCaptain = TeamCaptain(m_ForcedWinningTeam);
+            if (winningCaptain != null)
+                winningCaptain.m_Wins = Mathf.Max(winningCaptain.m_Wins, m_NumRoundsToWin - 1);
+            SetTitleText(departedTeam == 0 ? "ĐỘI XANH ĐÃ RỜI TRẬN" : "ĐỘI ĐỎ ĐÃ RỜI TRẬN");
+        }
+
+        private void AbortOnlineMatch(string message)
+        {
+            m_MatchAborted = true;
+            Debug.Log($"[GameManager] {message}");
+            SetTitleText(message);
             ReturnEveryoneToMenu(m_EndDelay);
+        }
+
+        private int ConnectedPlayersInTeam(int team, ulong excludingClientId)
+        {
+            int count = 0;
+            foreach (var entry in m_ClientTeams)
+            {
+                if (entry.Key == excludingClientId || entry.Value != team) continue;
+                if (NetworkManager.Singleton.ConnectedClients.ContainsKey(entry.Key)) count++;
+            }
+            return count;
+        }
+
+        private void ShowTemporaryTitle(string message, float duration)
+        {
+            SetTitleText(message);
+            StartCoroutine(ClearTemporaryTitle(message, duration));
+        }
+
+        private IEnumerator ClearTemporaryTitle(string message, float duration)
+        {
+            yield return new WaitForSeconds(duration);
+            if (!m_MatchAborted && m_TitleTextSync.Value.ToString() == message)
+                SetTitleText("");
         }
 
         // Server ra lệnh cho mọi máy (kể cả chính nó) rời trận và quay về MainMenu.
@@ -274,7 +356,7 @@ namespace Tanks.Complete
         private TankManager m_GameWinner;           // Reference to the winner of the game.  Used to make an announcement of who won.
 
         private PlayerData[] m_TankData;            // Data passed from the menu about each selected tank (at least 2, max 4)
-        private int m_PlayerCount = 0;              // The number of players (2 to 4), decided from the number of PlayerData passed by the menu
+        private int m_PlayerCount = 0;              // Số slot của trận; online lấy từ roster server, offline lấy từ menu.
         private TextMeshProUGUI m_TitleText;        // The text used to display game message. Automatically found as part of the Menu prefab
 
         private void Start()
@@ -306,6 +388,12 @@ namespace Tanks.Complete
 
         void GameStart()
         {
+            if (!ApplySpawnLayout())
+            {
+                SetTitleText("CẤU HÌNH ĐIỂM XUẤT PHÁT KHÔNG HỢP LỆ");
+                return;
+            }
+
             m_StartWait = new WaitForSeconds (m_StartDelay);
             m_EndWait = new WaitForSeconds (m_EndDelay);
 
@@ -313,6 +401,32 @@ namespace Tanks.Complete
             SetCameraTargets();
 
             StartCoroutine (GameLoop ());
+        }
+
+        private bool ApplySpawnLayout()
+        {
+            Transform[] layout = m_OnlineTeamMatch ? m_TeamSpawnPoints : m_DuelSpawnPoints;
+            int required = m_OnlineTeamMatch ? k_TeamPlayerCount : 2;
+
+            if (m_SpawnPoints == null || m_SpawnPoints.Length < required ||
+                layout == null || layout.Length < required)
+            {
+                Debug.LogError($"[GameManager] Thiếu spawn layout cho {(m_OnlineTeamMatch ? "2v2" : "đấu đôi")}.");
+                return false;
+            }
+
+            for (int i = 0; i < required; i++)
+            {
+                if (layout[i] == null)
+                {
+                    Debug.LogError($"[GameManager] Spawn layout thiếu phần tử tại slot {i}.");
+                    return false;
+                }
+
+                m_SpawnPoints[i].m_SpawnPoint = layout[i];
+            }
+
+            return true;
         }
 
         void ChangeGameState(GameState newState)
@@ -339,12 +453,82 @@ namespace Tanks.Complete
         //  [ONLINE] Mỗi máy tự chọn tank riêng
         // =====================================================================
 
+        private void InitializeOnlineRoster()
+        {
+            var nm = NetworkManager.Singleton;
+            if (nm == null || !nm.IsListening) return;
+
+            m_ClientTeams.Clear();
+            m_ClientSlots.Clear();
+
+            var connectedIds = new List<ulong>();
+            foreach (var client in nm.ConnectedClientsList)
+                connectedIds.Add(client.ClientId);
+            connectedIds.Sort();
+
+            NetworkLobbyManager lobby = NetworkLobbyManager.Instance;
+            m_OnlineTeamMatch = (lobby != null && lobby.IsTeamMatch) || connectedIds.Count == k_TeamPlayerCount;
+
+            if (m_OnlineTeamMatch)
+            {
+                var blue = new List<ulong>();
+                var red = new List<ulong>();
+
+                if (lobby != null && lobby.MatchTeams.Count == k_TeamPlayerCount)
+                {
+                    foreach (var entry in lobby.MatchTeams)
+                    {
+                        if (entry.Value == 0) blue.Add(entry.Key);
+                        else red.Add(entry.Key);
+                    }
+                }
+
+                // Fallback cho chạy test trực tiếp scene hoặc roster cũ/không hợp lệ.
+                if (blue.Count != k_TeamSize || red.Count != k_TeamSize)
+                {
+                    blue.Clear();
+                    red.Clear();
+                    for (int i = 0; i < connectedIds.Count; i++)
+                    {
+                        if (i < k_TeamSize) blue.Add(connectedIds[i]);
+                        else red.Add(connectedIds[i]);
+                    }
+                }
+
+                blue.Sort();
+                red.Sort();
+                for (int i = 0; i < blue.Count && i < k_TeamSize; i++)
+                    AssignRosterSlot(blue[i], 0, i);
+                for (int i = 0; i < red.Count && i < k_TeamSize; i++)
+                    AssignRosterSlot(red[i], 1, k_TeamSize + i);
+
+                m_PlayerCount = k_TeamPlayerCount;
+                Debug.Log($"[GameManager] Đã chốt roster 2v2: Xanh={blue.Count}, Đỏ={red.Count}.");
+                return;
+            }
+
+            m_PlayerCount = Mathf.Min(connectedIds.Count, m_SpawnPoints.Length);
+            for (int i = 0; i < m_PlayerCount; i++)
+                m_ClientSlots[connectedIds[i]] = i;
+        }
+
+        private void AssignRosterSlot(ulong clientId, int team, int slot)
+        {
+            m_ClientTeams[clientId] = team;
+            m_ClientSlots[clientId] = slot;
+        }
+
         // Client gọi hàm này (RPC gửi tới server) để báo mình chọn xe nào.
         // rpcParams cho biết clientId của người gửi.
-        [Rpc(SendTo.Server)]
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
         public void SubmitTankChoiceRpc(int tankIndex, RpcParams rpcParams = default)
         {
             ulong senderId = rpcParams.Receive.SenderClientId;
+            if (!m_ClientSlots.ContainsKey(senderId))
+            {
+                Debug.LogWarning($"[GameManager] Bỏ qua lựa chọn tank từ client ngoài roster: {senderId}.");
+                return;
+            }
             m_ClientTankChoice[senderId] = Mathf.Clamp(tankIndex, 0, 3);
             int chosen = m_ClientTankChoice.Count;
             int needed = NetworkManager.Singleton != null ? NetworkManager.Singleton.ConnectedClientsList.Count : 0;
@@ -358,11 +542,12 @@ namespace Tanks.Complete
             if (nm == null) return false;
 
             var clients = nm.ConnectedClientsList;
-            if (clients.Count < 2) return false;
+            int requiredPlayers = m_OnlineTeamMatch ? k_TeamPlayerCount : 2;
+            if (clients.Count != requiredPlayers || m_ClientSlots.Count != requiredPlayers) return false;
 
-            for (int i = 0; i < clients.Count; i++)
+            foreach (var clientId in m_ClientSlots.Keys)
             {
-                if (!m_ClientTankChoice.ContainsKey(clients[i].ClientId))
+                if (!nm.ConnectedClients.ContainsKey(clientId) || !m_ClientTankChoice.ContainsKey(clientId))
                     return false;
             }
             return true;
@@ -380,9 +565,7 @@ namespace Tanks.Complete
             }
         }
 
-        // Màu tương ứng với xe index 0..3. Lấy đúng màu slot mà người chơi đã thấy ở menu chọn xe
-        // (StartMenuSlot.m_SlotColor) để màu trong trận khớp với lúc chọn. Có palette dự phòng nếu
-        // không tìm được GameUIHandler.
+        // Màu cá nhân cho 1v1/offline. 2v2 không gọi nhánh này mà dùng GetTeamColor.
         private static readonly Color[] k_FallbackTankColors =
         {
             new Color(0.20f, 0.45f, 0.95f),   // xanh dương
@@ -404,6 +587,11 @@ namespace Tanks.Complete
             return k_FallbackTankColors[Mathf.Clamp(index, 0, k_FallbackTankColors.Length - 1)];
         }
 
+        private static Color GetTeamColor(int team)
+        {
+            return team == 0 ? k_BlueTeamColor : k_RedTeamColor;
+        }
+
 
         private void Update()
         {
@@ -411,6 +599,13 @@ namespace Tanks.Complete
 
             if (IsServer)
             {
+                if (m_OnlineTeamMatch && !m_GameLoopStarted &&
+                    NetworkManager.Singleton.ConnectedClientsList.Count != k_TeamPlayerCount)
+                {
+                    AbortOnlineMatch("KHÔNG ĐỦ NGƯỜI - TRẬN ĐẤU ĐÃ HỦY");
+                    return;
+                }
+
                 // Chỉ bắt đầu khi ĐỦ người VÀ mọi máy đã chọn xong xe của mình.
                 if (!m_GameLoopStarted && AllPlayersChosenTank())
                 {
@@ -522,32 +717,39 @@ namespace Tanks.Complete
 
             if (!IsServer) return;
 
-            var clients = NetworkManager.Singleton.ConnectedClientsList;
-            m_PlayerCount = Mathf.Min(clients.Count, m_SpawnPoints.Length);
+            var roster = new List<KeyValuePair<ulong, int>>(m_ClientSlots);
+            roster.Sort((a, b) => a.Value.CompareTo(b.Value));
+            if (!m_OnlineTeamMatch)
+                m_PlayerCount = Mathf.Min(roster.Count, m_SpawnPoints.Length);
 
-            for (int i = 0; i < m_PlayerCount; i++)
+            foreach (var rosterEntry in roster)
             {
-                ulong clientId = clients[i].ClientId;
-                // Dùng xe mà chính máy đó đã chọn; nếu thiếu (fallback) thì theo thứ tự slot.
-                int choice = m_ClientTankChoice.TryGetValue(clientId, out var picked) ? picked : i;
-                GameObject tankPrefab = GetTankPrefabByIndex(choice);
-                // Màu người chơi thấy ở menu chính là màu slot của xe đã chọn -> dùng lại để vào trận khớp màu.
-                Color tankColor = GetTankColorByIndex(choice);
-                Debug.Log($"[GameManager] Spawn tank cho client {clientId} bằng prefab '{tankPrefab.name}' (index {choice}).");
+                ulong clientId = rosterEntry.Key;
+                int slot = rosterEntry.Value;
+                if (slot < 0 || slot >= m_SpawnPoints.Length ||
+                    !NetworkManager.Singleton.ConnectedClients.ContainsKey(clientId))
+                    continue;
 
-                GameObject tankInstance = Instantiate(tankPrefab, m_SpawnPoints[i].m_SpawnPoint.position, m_SpawnPoints[i].m_SpawnPoint.rotation);
+                // Dùng xe mà chính máy đó đã chọn; nếu thiếu (fallback) thì theo thứ tự slot.
+                int choice = m_ClientTankChoice.TryGetValue(clientId, out var picked) ? picked : slot;
+                GameObject tankPrefab = GetTankPrefabByIndex(choice);
+                int team = m_ClientTeams.TryGetValue(clientId, out int assignedTeam) ? assignedTeam : -1;
+                Color tankColor = m_OnlineTeamMatch ? GetTeamColor(team) : GetTankColorByIndex(choice);
+                Debug.Log($"[GameManager] Spawn tank client {clientId}, slot {slot}, team {team}, prefab '{tankPrefab.name}'.");
+
+                GameObject tankInstance = Instantiate(tankPrefab, m_SpawnPoints[slot].m_SpawnPoint.position, m_SpawnPoints[slot].m_SpawnPoint.rotation);
                 var netObj = tankInstance.GetComponent<NetworkObject>();
                 netObj.SpawnWithOwnership(clientId);
 
-                m_SpawnPoints[i].m_Instance = tankInstance;
-                m_SpawnPoints[i].m_PlayerNumber = i + 1;
-                m_SpawnPoints[i].ControlIndex = -1;
-                m_SpawnPoints[i].m_ComputerControlled = false;
-                m_SpawnPoints[i].m_PlayerColor = tankColor;   // gán trước vòng Setup bên dưới
+                m_SpawnPoints[slot].m_Instance = tankInstance;
+                m_SpawnPoints[slot].m_PlayerNumber = slot + 1;
+                m_SpawnPoints[slot].ControlIndex = -1;
+                m_SpawnPoints[slot].m_ComputerControlled = false;
+                m_SpawnPoints[slot].m_PlayerColor = tankColor;
 
                 // Clients cannot infer the slot from OwnerClientId — that only matches while the
                 // host happens to be first in ConnectedClientsList. Send the authoritative index.
-                AssignTankSlotClientRpc(netObj.NetworkObjectId, i, tankColor);
+                AssignTankSlotClientRpc(netObj.NetworkObjectId, slot, tankColor);
             }
 
             foreach (var tank in m_SpawnPoints)
@@ -634,7 +836,7 @@ namespace Tanks.Complete
 
             // Increment the round number and display text showing the players what round it is.
             m_RoundNumber++;
-            SetTitleText("ROUND " + m_RoundNumber);
+            SetTitleText("VÒNG " + m_RoundNumber);
 
             // Wait for the specified length of time until yielding control back to the game loop.
             yield return m_StartWait;
@@ -694,8 +896,22 @@ namespace Tanks.Complete
         }
 
 
-        private bool IsOnlineTeamMatch => NetworkManager.Singleton != null
-            && NetworkManager.Singleton.IsListening && m_PlayerCount == 4;
+        public bool IsOnlineTeamMatch => m_OnlineTeamMatch && NetworkManager.Singleton != null
+            && NetworkManager.Singleton.IsListening;
+
+        public bool ShouldIgnoreFriendlyFire(ulong sourceClientId, ulong targetClientId)
+        {
+            if (!IsOnlineTeamMatch || sourceClientId == targetClientId) return false;
+            return m_ClientTeams.TryGetValue(sourceClientId, out int sourceTeam) &&
+                   m_ClientTeams.TryGetValue(targetClientId, out int targetTeam) &&
+                   sourceTeam == targetTeam;
+        }
+
+        private TankManager TeamCaptain(int team)
+        {
+            int slot = team == 0 ? 0 : k_TeamSize;
+            return slot >= 0 && slot < m_SpawnPoints.Length ? m_SpawnPoints[slot] : null;
+        }
 
         private int AliveInTeam(int team)
         {
@@ -735,6 +951,7 @@ namespace Tanks.Complete
         {
             if (IsOnlineTeamMatch)
             {
+                if (m_ForcedWinningTeam >= 0) return TeamCaptain(m_ForcedWinningTeam);
                 if (AliveInTeam(0) > 0 && AliveInTeam(1) == 0) return m_SpawnPoints[0];
                 if (AliveInTeam(1) > 0 && AliveInTeam(0) == 0) return m_SpawnPoints[2];
                 return null;
@@ -787,16 +1004,16 @@ namespace Tanks.Complete
                     return m_GameWinner == m_SpawnPoints[0] ? "ĐỘI XANH THẮNG TRẬN!" : "ĐỘI ĐỎ THẮNG TRẬN!";
 
                 string result = m_RoundWinner == null ? "HÒA!" :
-                    (m_RoundWinner == m_SpawnPoints[0] ? "ĐỘI XANH THẮNG ROUND!" : "ĐỘI ĐỎ THẮNG ROUND!");
+                    (m_RoundWinner == m_SpawnPoints[0] ? "ĐỘI XANH THẮNG VÒNG!" : "ĐỘI ĐỎ THẮNG VÒNG!");
                 return $"{result}\n\nĐỘI XANH: {blueWins}  -  ĐỘI ĐỎ: {redWins}";
             }
 
             // By default when a round ends there are no winners so the default end message is a draw.
-            string message = "DRAW!";
+            string message = "HÒA!";
 
             // If there is a winner then change the message to reflect that.
             if (m_RoundWinner != null)
-                message = m_RoundWinner.m_ColoredPlayerText + " WINS THE ROUND!";
+                message = m_RoundWinner.m_ColoredPlayerText + " THẮNG VÒNG!";
 
             // Add some line breaks after the initial message.
             message += "\n\n\n\n";
@@ -805,12 +1022,12 @@ namespace Tanks.Complete
             for (int i = 0; i < m_PlayerCount; i++)
             {
                 if (m_SpawnPoints[i].m_Instance == null) continue;
-                message += m_SpawnPoints[i].m_ColoredPlayerText + ": " + m_SpawnPoints[i].m_Wins + " WINS\n";
+                message += m_SpawnPoints[i].m_ColoredPlayerText + ": " + m_SpawnPoints[i].m_Wins + " VÒNG THẮNG\n";
             }
 
             // If there is a game winner, change the entire message to reflect that.
             if (m_GameWinner != null)
-                message = m_GameWinner.m_ColoredPlayerText + " WINS THE GAME!";
+                message = m_GameWinner.m_ColoredPlayerText + " THẮNG TRẬN!";
 
             return message;
         }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
 using Unity.Services.Multiplayer;
@@ -20,6 +21,12 @@ namespace Tanks.Backend
 
         public ISession CurrentSession { get; private set; }
         public bool IsInSession => CurrentSession != null;
+
+        // Roster của trận sắp bắt đầu. Host ghi dữ liệu này ngay trước khi đổi scene;
+        // object tồn tại qua DontDestroyOnLoad nên GameManager có thể dùng đúng đội đã chọn ở lobby.
+        public bool IsTeamMatch { get; private set; }
+        public IReadOnlyDictionary<ulong, int> MatchTeams => m_MatchTeams;
+        private readonly Dictionary<ulong, int> m_MatchTeams = new Dictionary<ulong, int>();
 
         private bool m_IsBusy;   // Chặn gọi chồng Create/Join khi một tác vụ đang chạy
         private bool m_NetcodeHooked;
@@ -51,8 +58,10 @@ namespace Tanks.Backend
             if (!CanStartSessionOperation()) return;
 
             m_IsBusy = true;
+            ClearMatchRoster();
             try
             {
+                await PrepareNetcodeForSessionStartAsync();
                 Debug.Log($"[NetworkLobbyManager] Đang tạo session: {sessionName}...");
 
                 // Thiết lập SessionOptions cấu hình sử dụng Relay và giới hạn số người chơi
@@ -95,8 +104,10 @@ namespace Tanks.Backend
             if (!CanStartSessionOperation()) return;
 
             m_IsBusy = true;
+            ClearMatchRoster();
             try
             {
+                await PrepareNetcodeForSessionStartAsync();
                 Debug.Log($"[NetworkLobbyManager] Đang tham gia phòng với Code: {joinCode}...");
 
                 CurrentSession = await MultiplayerService.Instance.JoinSessionByCodeAsync(joinCode);
@@ -115,6 +126,18 @@ namespace Tanks.Backend
             {
                 m_IsBusy = false;
             }
+        }
+
+        private static async Task PrepareNetcodeForSessionStartAsync()
+        {
+            var nm = NetworkManager.Singleton;
+            if (nm == null || !nm.IsListening) return;
+
+            Debug.LogWarning("[NetworkLobbyManager] Netcode vẫn đang chạy trước khi tạo/vào phòng mới. Dọn trạng thái cũ trước.");
+            nm.Shutdown();
+
+            for (int i = 0; i < 60 && nm != null && nm.IsListening; i++)
+                await Task.Yield();
         }
 
         /// <summary>
@@ -153,6 +176,7 @@ namespace Tanks.Backend
             // Xoá tham chiếu TRƯỚC khi await: nếu Netcode shutdown kích hoạt HandleLocalDisconnect
             // giữa chừng, nó sẽ thấy CurrentSession == null và không phát OnSessionLeft lần hai.
             CurrentSession = null;
+            ClearMatchRoster();
             UnhookNetcode();
 
             try
@@ -179,12 +203,14 @@ namespace Tanks.Backend
         {
             if (CurrentSession == null)
             {
+                ClearMatchRoster();
                 ShutdownNetcode();
                 return;
             }
 
             var session = CurrentSession;
             CurrentSession = null;
+            ClearMatchRoster();
             UnhookNetcode();
 
             if (!string.IsNullOrEmpty(reason))
@@ -195,6 +221,63 @@ namespace Tanks.Backend
 
             ShutdownNetcode();
             OnSessionLeft?.Invoke();
+        }
+
+        /// <summary>
+        /// Chốt roster do host đã duyệt ở lobby. Team 0 là Xanh, team 1 là Đỏ.
+        /// Dữ liệu chỉ phục vụ trận kế tiếp và được xoá khi session kết thúc.
+        /// </summary>
+        public void ConfigureMatchRoster(bool isTeamMatch, IReadOnlyDictionary<ulong, int> teams)
+        {
+            m_MatchTeams.Clear();
+            IsTeamMatch = isTeamMatch;
+
+            if (!isTeamMatch || teams == null)
+                return;
+
+            foreach (var entry in teams)
+                m_MatchTeams[entry.Key] = Mathf.Clamp(entry.Value, 0, 1);
+        }
+
+        /// <summary>Khoá session trước khi tải map để không có người mới chen vào roster giữa trận.</summary>
+        public async Task<bool> LockCurrentSessionAsync()
+        {
+            return await SetCurrentSessionLockAsync(true);
+        }
+
+        public async Task<bool> UnlockCurrentSessionAsync()
+        {
+            return await SetCurrentSessionLockAsync(false);
+        }
+
+        private async Task<bool> SetCurrentSessionLockAsync(bool isLocked)
+        {
+            if (CurrentSession == null) return false;
+
+            try
+            {
+                IHostSession hostSession = CurrentSession.AsHost();
+                hostSession.IsLocked = isLocked;
+                await hostSession.SavePropertiesAsync();
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[NetworkLobbyManager] Không cập nhật được trạng thái khoá session: {e.Message}");
+                OnSessionError?.Invoke("Không thể cập nhật trạng thái khoá phòng.");
+                return false;
+            }
+        }
+
+        public bool TryGetMatchTeam(ulong clientId, out int team)
+        {
+            return m_MatchTeams.TryGetValue(clientId, out team);
+        }
+
+        public void ClearMatchRoster()
+        {
+            IsTeamMatch = false;
+            m_MatchTeams.Clear();
         }
 
         private static async Task LeaveQuietlyAsync(ISession session)

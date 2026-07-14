@@ -78,10 +78,14 @@ namespace Tanks.Complete
                 m_Lobby1v1Panel = existingCanvas.Find("Lobby1v1Panel")?.gameObject;
                 m_OfflineMapSelectPanel = existingCanvas.Find("OfflineMapSelectPanel")?.gameObject;
 
-                // Tự động tạo nếu chưa được bake
-                if (m_OfflineMapSelectPanel == null) {
-                    m_OfflineMapSelectPanel = CreateOfflineMapSelectPanel(existingCanvas);
+                // OfflineMapSelectPanel có listener và bố cục sinh bằng code. Dựng lại ở runtime
+                // để scene baked cũ không che phiên bản giao diện mới.
+                if (m_OfflineMapSelectPanel != null)
+                {
+                    DestroyImmediate(m_OfflineMapSelectPanel);
+                    m_OfflineMapSelectPanel = null;
                 }
+                m_OfflineMapSelectPanel = CreateOfflineMapSelectPanel(existingCanvas);
 
                 // Lobby1v1Panel là panel ĐỘNG: các handler onClick và tham chiếu widget
                 // (m_CreateRoomButton, m_Lobby1v1Status, m_MapPickFills...) chỉ được nối lúc

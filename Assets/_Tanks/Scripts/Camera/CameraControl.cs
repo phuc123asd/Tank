@@ -72,15 +72,19 @@ namespace Tanks.Complete
             Vector3 averagePos = new Vector3 ();
             int numTargets = 0;
 
+            if (m_Targets == null)
+                return;
+
             // Go through all the targets and add their positions together.
             for (int i = 0; i < m_Targets.Length; i++)
             {
                 // If the target isn't active, go on to the next one.
-                if (!m_Targets[i].gameObject.activeSelf)
+                Transform target = m_Targets[i];
+                if (target == null || !target.gameObject.activeSelf)
                     continue;
 
                 // Add to the average and increment the number of targets in the average.
-                averagePos += m_Targets[i].position;
+                averagePos += target.position;
                 numTargets++;
             }
 
@@ -112,14 +116,18 @@ namespace Tanks.Complete
             float size = 0f;
 
             // Go through all the targets...
+            if (m_Targets == null)
+                return m_MinSize;
+
             for (int i = 0; i < m_Targets.Length; i++)
             {
                 // ... and if they aren't active continue on to the next target.
-                if (!m_Targets[i].gameObject.activeSelf)
+                Transform target = m_Targets[i];
+                if (target == null || !target.gameObject.activeSelf)
                     continue;
 
                 // Otherwise, find the position of the target in the camera's local space.
-                Vector3 targetLocalPos = m_Camera.transform.InverseTransformPoint(m_Targets[i].position);
+                Vector3 targetLocalPos = m_Camera.transform.InverseTransformPoint(target.position);
 
                 // Find the position of the target from the desired position of the camera's local space.
                 Vector3 desiredPosToTarget = targetLocalPos - desiredLocalPos;

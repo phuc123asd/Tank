@@ -31,15 +31,24 @@ namespace Tanks.Complete
         private readonly TextMeshProUGUI[] m_SlotStateLabels = new TextMeshProUGUI[k_MaxOnlinePlayers];
         private readonly Image[] m_SlotFills = new Image[k_MaxOnlinePlayers];
         private readonly Image[] m_SlotThumbs = new Image[k_MaxOnlinePlayers];
+        private readonly Image[] m_SlotTeamBars = new Image[k_MaxOnlinePlayers];
         private readonly GameObject[] m_RoomSlots = new GameObject[k_MaxOnlinePlayers];
         private TextMeshProUGUI m_OnlineLobbyTitle;
         private TextMeshProUGUI m_VsLabel;
+        private GameObject m_BlueTeamHeaderGo;
+        private GameObject m_RedTeamHeaderGo;
         private bool m_IsTeam2v2;
         private readonly Image[] m_MapPickFills = new Image[3];
+        private readonly Button[] m_MapPickButtons = new Button[3];
+        private readonly UIMapSelectionVisual[] m_MapPickVisuals = new UIMapSelectionVisual[3];
+        private TextMeshProUGUI m_SelectedMapLabel;
+        private bool m_MapSelectionInitialized;
         private RectTransform m_WaitingRadarRt;
-        private GameObject m_HostControls;   // Chọn map + nút Bắt đầu (chỉ Chủ phòng thấy)
+        private GameObject m_HostControls;   // Khu map luôn hiện; chỉ Chủ phòng được tương tác.
         private GameObject m_WaitingLabelGo;  // Nhãn "Chờ chủ phòng..." (chỉ Khách thấy)
         private Button m_StartMatchButton;
+        private GameObject m_StartMatchButtonGo;
+        private GameObject m_ChangeTeamButtonGo;
 
         private Button m_CreateRoomButton;
         private Button m_JoinRoomButton;
@@ -55,6 +64,7 @@ namespace Tanks.Complete
             public ulong ClientId;
             public string DisplayName;
             public string AvatarId;
+            public int Team;
         }
         private System.Collections.Generic.Dictionary<ulong, ProfileInfoMessage> m_LobbyProfiles = new System.Collections.Generic.Dictionary<ulong, ProfileInfoMessage>();
         private bool m_NetcodeEventsHooked = false;
@@ -74,7 +84,7 @@ namespace Tanks.Complete
             var bg = CreateElement(panel.transform, "Background", typeof(RectTransform), typeof(Image));
             StretchFull(bg.GetComponent<RectTransform>());
             var bgImg = bg.GetComponent<Image>();
-            
+
             // Tự động load ảnh nền desert, nếu không có thì fallback sang màu cam
             Sprite bgSprite = LoadSpriteWithFallback("background_desert");
             if (bgSprite != null)
@@ -87,30 +97,35 @@ namespace Tanks.Complete
                 bgImg.color = m_BgColor;
             }
 
-            // Phủ một lớp bóng tối (dimmer) mờ 35% để làm nổi bật các Panel UI ở giữa sảnh
+            // Làm dịu ảnh nền để các khối thông tin dễ đọc ở mọi bản đồ.
             var dimmer = CreateElement(panel.transform, "Dimmer", typeof(RectTransform), typeof(Image));
             StretchFull(dimmer.GetComponent<RectTransform>());
-            dimmer.GetComponent<Image>().color = new Color(0, 0, 0, 0.35f);
+            dimmer.GetComponent<Image>().color = new Color(0, 0, 0, 0.46f);
 
             // Tiêu đề
             var titleRt = CreateElement(panel.transform, "TitleContainer", typeof(RectTransform)).GetComponent<RectTransform>();
-            titleRt.anchorMin = titleRt.anchorMax = new Vector2(0.5f, 0.88f);
+            titleRt.anchorMin = titleRt.anchorMax = new Vector2(0.5f, 0.91f);
             titleRt.anchoredPosition = Vector2.zero;
-            CreateShadowedTitle(titleRt.transform, "ĐẤU TRƯỜNG 1v1", 80f);
+            CreateShadowedTitle(titleRt.transform, "ĐẤU TRƯỜNG 1v1", 62f);
             m_OnlineLobbyTitle = titleRt.GetComponentInChildren<TextMeshProUGUI>();
 
             // Nút quay lại / rời phòng
             var backRt = CreateElement(panel.transform, "BackBtn", typeof(RectTransform)).GetComponent<RectTransform>();
             backRt.anchorMin = backRt.anchorMax = new Vector2(0f, 1f);
-            backRt.anchoredPosition = new Vector2(180, -80);
-            CreatePillButton(backRt, "< TRỞ VỀ", m_CardColor1, 260, 70, 34, OnLobby1v1Back);
+            backRt.anchoredPosition = new Vector2(135, -58);
+            CreatePillButton(backRt, "< TRỞ VỀ", m_CardColor1, 210, 58, 27, OnLobby1v1Back);
 
             // Thanh trạng thái dưới cùng
-            var statusRt = CreateElement(panel.transform, "Status", typeof(RectTransform)).GetComponent<RectTransform>();
-            statusRt.anchorMin = statusRt.anchorMax = new Vector2(0.5f, 0.08f);
-            statusRt.sizeDelta = new Vector2(1400, 60);
+            var statusBg = CreateImage(panel.transform, "Status",
+                CreateRoundedRectSprite(64, 28, new Color(0.04f, 0.05f, 0.06f, 0.78f), new Color(1f, 1f, 1f, 0.16f), 2), Image.Type.Sliced, true);
+            var statusRt = statusBg.rectTransform;
+            statusRt.anchorMin = statusRt.anchorMax = new Vector2(0.5f, 0.075f);
+            statusRt.sizeDelta = new Vector2(900, 56);
             statusRt.anchoredPosition = Vector2.zero;
-            m_Lobby1v1Status = CreateTMP(statusRt, "Label", "", 34, FontStyles.Bold | FontStyles.Italic, Color.white, TextAlignmentOptions.Center);
+            m_Lobby1v1Status = CreateTMP(statusRt, "Label", "", 26, FontStyles.Bold | FontStyles.Italic, Color.white, TextAlignmentOptions.Center);
+            StretchFull(m_Lobby1v1Status.rectTransform);
+            m_Lobby1v1Status.rectTransform.offsetMin = new Vector2(24, 0);
+            m_Lobby1v1Status.rectTransform.offsetMax = new Vector2(-24, 0);
 
             BuildEntryView(panel.transform);
             BuildRoomView(panel.transform);
@@ -165,90 +180,151 @@ namespace Tanks.Complete
         {
             var view = CreateElement(panel, "RoomView", typeof(RectTransform)).GetComponent<RectTransform>();
             view.anchorMin = view.anchorMax = view.pivot = new Vector2(0.5f, 0.5f);
-            view.sizeDelta = new Vector2(1400, 760);
-            view.anchoredPosition = Vector2.zero;
+            view.sizeDelta = new Vector2(1400, 720);
+            view.anchoredPosition = new Vector2(0, -8);
             m_RoomView = view.gameObject;
             m_RoomView.SetActive(false);
 
-            // 1. Cụm Mã Phòng ở phía trên (Thu gọn lại)
+            // Mã phòng nằm gọn ở góc phải, tách khỏi tiêu đề và nội dung thi đấu.
             var codeGroup = CreateElement(view, "CodeGroup", typeof(RectTransform)).GetComponent<RectTransform>();
-            codeGroup.anchorMin = codeGroup.anchorMax = codeGroup.pivot = new Vector2(0.5f, 1f);
-            codeGroup.anchoredPosition = new Vector2(0, -20);
-            codeGroup.sizeDelta = new Vector2(800, 100);
+            codeGroup.anchorMin = codeGroup.anchorMax = codeGroup.pivot = new Vector2(1f, 1f);
+            codeGroup.anchoredPosition = new Vector2(-18, -18);
+            codeGroup.sizeDelta = new Vector2(450, 58);
 
-            var codeTitle = CreateTMP(codeGroup, "CodeTitle", "MÃ PHÒNG:", 26, FontStyles.Bold, new Color(1f, 1f, 1f, 0.9f), TextAlignmentOptions.Center);
-            codeTitle.rectTransform.anchorMin = codeTitle.rectTransform.anchorMax = codeTitle.rectTransform.pivot = new Vector2(0.5f, 1f);
-            codeTitle.rectTransform.sizeDelta = new Vector2(300, 30);
+            var codeTitle = CreateTMP(codeGroup, "CodeTitle", "MÃ PHÒNG", 19, FontStyles.Bold,
+                new Color(1f, 1f, 1f, 0.78f), TextAlignmentOptions.Left);
+            codeTitle.rectTransform.anchorMin = codeTitle.rectTransform.anchorMax = codeTitle.rectTransform.pivot = new Vector2(0f, 0.5f);
+            codeTitle.rectTransform.sizeDelta = new Vector2(108, 40);
             codeTitle.rectTransform.anchoredPosition = new Vector2(0, 0);
 
-            // Bảng mã phòng trắng viền đen
             var codeBox = CreateImage(codeGroup, "CodeBox",
-                CreateRoundedRectSprite(64, 40, Color.white, m_OutlineColor, 4), Image.Type.Sliced, true);
+                CreateRoundedRectSprite(64, 26, Color.white, m_OutlineColor, 3), Image.Type.Sliced, true);
             var codeBoxRt = codeBox.rectTransform;
-            codeBoxRt.anchorMin = codeBoxRt.anchorMax = codeBoxRt.pivot = new Vector2(0.5f, 1f);
-            codeBoxRt.sizeDelta = new Vector2(320, 70);
-            codeBoxRt.anchoredPosition = new Vector2(-120, -30);
+            codeBoxRt.anchorMin = codeBoxRt.anchorMax = codeBoxRt.pivot = new Vector2(0f, 0.5f);
+            codeBoxRt.sizeDelta = new Vector2(190, 52);
+            codeBoxRt.anchoredPosition = new Vector2(112, 0);
 
-            m_CodeLabel = CreateTMP(codeBoxRt, "CodeLabel", "------", 50, FontStyles.Bold, m_TextDark, TextAlignmentOptions.Center);
+            m_CodeLabel = CreateTMP(codeBoxRt, "CodeLabel", "------", 30, FontStyles.Bold, m_TextDark, TextAlignmentOptions.Center);
             m_CodeLabel.rectTransform.anchorMin = m_CodeLabel.rectTransform.anchorMax = m_CodeLabel.rectTransform.pivot = new Vector2(0.5f, 0.5f);
-            m_CodeLabel.rectTransform.sizeDelta = new Vector2(300, 60);
+            m_CodeLabel.rectTransform.sizeDelta = new Vector2(176, 44);
             m_CodeLabel.rectTransform.anchoredPosition = Vector2.zero;
-            m_CodeLabel.characterSpacing = 6f;
+            m_CodeLabel.characterSpacing = 4f;
 
             var copyHolder = CreateElement(codeGroup, "CopyHolder", typeof(RectTransform)).GetComponent<RectTransform>();
-            copyHolder.anchorMin = copyHolder.anchorMax = copyHolder.pivot = new Vector2(0.5f, 1f);
-            copyHolder.anchoredPosition = new Vector2(130, -30);
-            CreatePillButton(copyHolder, "SAO CHÉP", m_CardColor2, 160, 70, 22, OnCopyCodeClicked);
+            copyHolder.anchorMin = copyHolder.anchorMax = copyHolder.pivot = new Vector2(0f, 0.5f);
+            copyHolder.anchoredPosition = new Vector2(370, 0);
+            CreatePillButton(copyHolder, "SAO CHÉP", m_CardColor2, 136, 52, 18, OnCopyCodeClicked);
 
-            // 2. Hai bay đối đầu: bên đã vào phòng là LOCKED, bên còn lại là silhouette đang quét.
+            // Tiêu đề đội giúp đọc bố cục ngay lập tức nhưng không che nhân vật hay bản đồ.
+            var blueHeader = CreateImage(view, "BlueTeamHeader",
+                CreateRoundedRectSprite(64, 24, new Color(0.03f, 0.08f, 0.10f, 0.88f), m_CyanColor, 3), Image.Type.Sliced, true);
+            blueHeader.rectTransform.anchorMin = blueHeader.rectTransform.anchorMax = blueHeader.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            blueHeader.rectTransform.sizeDelta = new Vector2(360, 52);
+            blueHeader.rectTransform.anchoredPosition = new Vector2(-475, 230);
+            m_BlueTeamHeaderGo = blueHeader.gameObject;
+            var blueHeaderLabel = CreateTMP(blueHeader.transform, "Label", "ĐỘI XANH", 25, FontStyles.Bold, m_CyanColor, TextAlignmentOptions.Center);
+            StretchFull(blueHeaderLabel.rectTransform);
+
+            var redHeader = CreateImage(view, "RedTeamHeader",
+                CreateRoundedRectSprite(64, 24, new Color(0.11f, 0.04f, 0.03f, 0.88f), m_CardColor1, 3), Image.Type.Sliced, true);
+            redHeader.rectTransform.anchorMin = redHeader.rectTransform.anchorMax = redHeader.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            redHeader.rectTransform.sizeDelta = new Vector2(360, 52);
+            redHeader.rectTransform.anchoredPosition = new Vector2(475, 230);
+            m_RedTeamHeaderGo = redHeader.gameObject;
+            var redHeaderLabel = CreateTMP(redHeader.transform, "Label", "ĐỘI ĐỎ", 25, FontStyles.Bold, m_CardColor1, TextAlignmentOptions.Center);
+            StretchFull(redHeaderLabel.rectTransform);
+
             for (int i = 0; i < k_MaxOnlinePlayers; i++)
                 m_RoomSlots[i] = CreateRoomSlot(view, i);
-            
-            var vsRt = CreateElement(view, "VSLabel", typeof(RectTransform)).GetComponent<RectTransform>();
-            vsRt.anchorMin = vsRt.anchorMax = vsRt.pivot = new Vector2(0.5f, 0.5f);
-            vsRt.sizeDelta = new Vector2(200, 100);
-            vsRt.anchoredPosition = new Vector2(0, 70);
-            m_VsLabel = CreateTMP(vsRt, "VS", "VS", 100, FontStyles.Bold | FontStyles.Italic, m_PlayButtonColor, TextAlignmentOptions.Center);
 
-            // 3. Khu điều khiển của Chủ phòng (Nằm gọn dưới đáy Y = 0)
-            var host = CreateElement(view, "HostControls", typeof(RectTransform)).GetComponent<RectTransform>();
-            host.anchorMin = host.anchorMax = host.pivot = new Vector2(0.5f, 0f);
-            host.sizeDelta = new Vector2(1000, 260);
-            host.anchoredPosition = new Vector2(0, 0);
+            // Khu thiết lập trận luôn ở giữa, tách biệt rõ hai đội.
+            var setup = CreateElement(view, "MatchSetup", typeof(RectTransform)).GetComponent<RectTransform>();
+            setup.anchorMin = setup.anchorMax = setup.pivot = new Vector2(0.5f, 0.5f);
+            setup.sizeDelta = new Vector2(410, 410);
+            setup.anchoredPosition = new Vector2(0, 0);
+            CreateShadow(setup, 96, 32, new Vector2(10, -12), new Vector2(10, -12), 0.32f);
+            var setupBg = CreateImage(setup, "Fill",
+                CreateRoundedRectSprite(96, 28, new Color(0.035f, 0.045f, 0.05f, 0.94f), new Color(1f, 0.82f, 0.25f, 0.75f), 3), Image.Type.Sliced, true);
+            StretchFull(setupBg.rectTransform);
+
+            var setupTitle = CreateTMP(setupBg.transform, "Title", "THIẾT LẬP TRẬN", 23, FontStyles.Bold,
+                new Color(1f, 1f, 1f, 0.78f), TextAlignmentOptions.Center);
+            setupTitle.rectTransform.anchorMin = setupTitle.rectTransform.anchorMax = setupTitle.rectTransform.pivot = new Vector2(0.5f, 1f);
+            setupTitle.rectTransform.sizeDelta = new Vector2(330, 34);
+            setupTitle.rectTransform.anchoredPosition = new Vector2(0, -26);
+
+            var vsBadge = CreateImage(setupBg.transform, "VsBadge",
+                CreateRoundedRectSprite(64, 28, new Color(0.12f, 0.10f, 0.04f, 0.95f), m_PlayButtonColor, 3), Image.Type.Sliced, true);
+            var vsRt = vsBadge.rectTransform;
+            vsRt.anchorMin = vsRt.anchorMax = vsRt.pivot = new Vector2(0.5f, 0.5f);
+            vsRt.sizeDelta = new Vector2(104, 58);
+            vsRt.anchoredPosition = new Vector2(0, 102);
+            m_VsLabel = CreateTMP(vsRt, "VS", "VS", 40, FontStyles.Bold | FontStyles.Italic, m_PlayButtonColor, TextAlignmentOptions.Center);
+            StretchFull(m_VsLabel.rectTransform);
+
+            // Chủ phòng chọn bản đồ và bắt đầu trong cùng một cột trung tâm.
+            var host = CreateElement(setupBg.transform, "HostControls", typeof(RectTransform)).GetComponent<RectTransform>();
+            host.anchorMin = host.anchorMax = host.pivot = new Vector2(0.5f, 0.5f);
+            host.sizeDelta = new Vector2(390, 250);
+            host.anchoredPosition = new Vector2(0, -58);
             m_HostControls = host.gameObject;
 
-            float[] xs = { -250, 0, 250 };
+            var mapTitle = CreateTMP(host, "MapTitle", "CHỌN CHIẾN TRƯỜNG", 18, FontStyles.Bold,
+                new Color(1f, 1f, 1f, 0.65f), TextAlignmentOptions.Center);
+            mapTitle.rectTransform.anchorMin = mapTitle.rectTransform.anchorMax = mapTitle.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            mapTitle.rectTransform.sizeDelta = new Vector2(320, 28);
+            mapTitle.rectTransform.anchoredPosition = new Vector2(0, 78);
+
+            float[] xs = { -124, 0, 124 };
+            m_MapSelectionInitialized = false;
             for (int i = 0; i < k_Lobby1v1Maps.Length; i++)
             {
                 string map = k_Lobby1v1Maps[i];
                 CreateMapCard(host, map, xs[i], i);
             }
 
-            var startHolder = CreateElement(host, "StartHolder", typeof(RectTransform)).GetComponent<RectTransform>();
-            startHolder.anchorMin = startHolder.anchorMax = startHolder.pivot = new Vector2(0.5f, 0f);
-            startHolder.anchoredPosition = new Vector2(0, 18); // Nằm dưới cụm map, không che thẻ.
-            m_StartMatchButton = CreatePillButton(startHolder, "BẮT ĐẦU TRẬN ĐẤU", m_PlayButtonColor, 440, 74, 30, OnStartMatchClicked);
+            m_SelectedMapLabel = CreateTMP(host, "SelectedMapLabel", "", 15,
+                FontStyles.Bold | FontStyles.Italic, m_PlayButtonColor, TextAlignmentOptions.Center);
+            m_SelectedMapLabel.rectTransform.anchorMin = m_SelectedMapLabel.rectTransform.anchorMax =
+                m_SelectedMapLabel.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            m_SelectedMapLabel.rectTransform.sizeDelta = new Vector2(330, 24);
+            m_SelectedMapLabel.rectTransform.anchoredPosition = new Vector2(0, -38);
+            m_SelectedMapLabel.characterSpacing = 1.5f;
 
-            // Nhãn chờ (Khách), dạng banner radar thay vì text trần.
-            var waitRt = CreateElement(view, "WaitingLabel", typeof(RectTransform)).GetComponent<RectTransform>();
-            waitRt.anchorMin = waitRt.anchorMax = waitRt.pivot = new Vector2(0.5f, 0f);
-            waitRt.sizeDelta = new Vector2(820, 72);
-            waitRt.anchoredPosition = new Vector2(0, 100);
+            var startHolder = CreateElement(host, "StartHolder", typeof(RectTransform)).GetComponent<RectTransform>();
+            startHolder.anchorMin = startHolder.anchorMax = startHolder.pivot = new Vector2(0.5f, 0.5f);
+            startHolder.anchoredPosition = new Vector2(0, -92);
+            m_StartMatchButton = CreatePillButton(startHolder, "BẮT ĐẦU TRẬN ĐẤU", m_PlayButtonColor, 342, 62, 24, OnStartMatchClicked);
+            m_StartMatchButtonGo = startHolder.gameObject;
+
+            // Khách vẫn thấy map host đã chọn; banner này thay vị trí nút Bắt đầu.
+            var waitRt = CreateElement(setupBg.transform, "WaitingLabel", typeof(RectTransform)).GetComponent<RectTransform>();
+            waitRt.anchorMin = waitRt.anchorMax = waitRt.pivot = new Vector2(0.5f, 0.5f);
+            waitRt.sizeDelta = new Vector2(342, 62);
+            waitRt.anchoredPosition = new Vector2(0, -150);
             var waitBg = CreateImage(waitRt, "Fill",
                 CreateRoundedRectSprite(64, 32, new Color(0.05f, 0.07f, 0.08f, 0.84f), m_PlayButtonColor, 3), Image.Type.Sliced, true);
+            StretchFull(waitBg.rectTransform);
             var radar = CreateImage(waitBg.transform, "Radar",
                 CreateRadarSprite(96, m_CyanColor, new Color(1f, 1f, 1f, 0.28f)), Image.Type.Simple, false);
             m_WaitingRadarRt = radar.rectTransform;
             m_WaitingRadarRt.anchorMin = m_WaitingRadarRt.anchorMax = m_WaitingRadarRt.pivot = new Vector2(0f, 0.5f);
-            m_WaitingRadarRt.sizeDelta = new Vector2(46, 46);
-            m_WaitingRadarRt.anchoredPosition = new Vector2(36, 0);
-            var waitLabel = CreateTMP(waitBg.transform, "Label", "ĐÃ SẴN SÀNG - ĐANG CHỜ CHỦ PHÒNG", 28,
+            m_WaitingRadarRt.sizeDelta = new Vector2(40, 40);
+            m_WaitingRadarRt.anchoredPosition = new Vector2(22, 0);
+            var waitLabel = CreateTMP(waitBg.transform, "Label", "ĐANG CHỜ CHỦ PHÒNG...", 18,
                 FontStyles.Bold | FontStyles.Italic, Color.white, TextAlignmentOptions.Center);
-            waitLabel.rectTransform.offsetMin = new Vector2(86, 0);
-            waitLabel.rectTransform.offsetMax = new Vector2(-24, 0);
+            waitLabel.rectTransform.offsetMin = new Vector2(58, 4);
+            waitLabel.rectTransform.offsetMax = new Vector2(-14, -4);
             m_WaitingLabelGo = waitRt.gameObject;
 
-            SelectMap(m_SelectedMap);
+            // Đổi đội là hành động phụ, đặt dưới bảng thiết lập để không cạnh tranh với nút Bắt đầu.
+            var changeTeamRt = CreateElement(view, "ChangeTeamButton", typeof(RectTransform)).GetComponent<RectTransform>();
+            changeTeamRt.anchorMin = changeTeamRt.anchorMax = changeTeamRt.pivot = new Vector2(0.5f, 0.5f);
+            changeTeamRt.anchoredPosition = new Vector2(0, -244);
+            CreatePillButton(changeTeamRt, "ĐỔI ĐỘI", m_CyanColor, 190, 50, 21, OnChangeTeamClicked);
+            m_ChangeTeamButtonGo = changeTeamRt.gameObject;
+
+            ApplySelectedMap(m_SelectedMap);
             ApplyOnlineModeLayout();
         }
 
@@ -257,69 +333,62 @@ namespace Tanks.Complete
             var slotGo = CreateElement(parent, $"Slot_{index}", typeof(RectTransform));
             var rt = slotGo.GetComponent<RectTransform>();
             rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
-            rt.sizeDelta = new Vector2(300, 390);
+            rt.sizeDelta = new Vector2(360, 160);
 
-            CreateShadow(slotGo.transform, 96, 32, new Vector2(12, -14), new Vector2(12, -14), 0.30f);
+            CreateShadow(slotGo.transform, 96, 28, new Vector2(9, -10), new Vector2(9, -10), 0.28f);
 
-            // Nền bay/viền.
+            // Card trung tính; màu đội chỉ dùng làm đường nhấn để avatar luôn dễ nhìn.
             var fill = CreateImage(slotGo.transform, "Fill",
-                CreateRoundedRectSprite(100, 24, new Color(0.05f, 0.07f, 0.08f, 0.88f), Color.white, 5), Image.Type.Sliced, true);
+                CreateRoundedRectSprite(96, 22, new Color(0.035f, 0.045f, 0.05f, 0.94f), new Color(1f, 1f, 1f, 0.18f), 2), Image.Type.Sliced, true);
             m_SlotFills[index] = fill;
             StretchFull(fill.rectTransform);
 
-            var scanLine = CreateImage(fill.transform, "ScanLine",
-                CreateRoundedRectSprite(16, 0, new Color(1f, 1f, 1f, 0.18f), Color.clear, 0), Image.Type.Sliced, false);
-            scanLine.rectTransform.anchorMin = new Vector2(0.09f, 0.68f);
-            scanLine.rectTransform.anchorMax = new Vector2(0.91f, 0.68f);
-            scanLine.rectTransform.sizeDelta = new Vector2(0, 4);
-            scanLine.rectTransform.anchoredPosition = Vector2.zero;
+            var teamBar = CreateImage(fill.transform, "TeamBar",
+                CreateRoundedRectSprite(24, 4, Color.white, Color.clear, 0), Image.Type.Sliced, false);
+            teamBar.rectTransform.anchorMin = new Vector2(0f, 0.14f);
+            teamBar.rectTransform.anchorMax = new Vector2(0f, 0.86f);
+            teamBar.rectTransform.pivot = new Vector2(0f, 0.5f);
+            teamBar.rectTransform.sizeDelta = new Vector2(7, 0);
+            teamBar.rectTransform.anchoredPosition = new Vector2(8, 0);
+            m_SlotTeamBars[index] = teamBar;
 
-            // Vùng avatar/silhouette.
-            var thumbGo = CreateElement(fill.transform, "Thumb", typeof(RectTransform), typeof(Image));
+            var avatarFrame = CreateImage(fill.transform, "AvatarFrame",
+                CreateRoundedRectSprite(64, 18, new Color(0.08f, 0.10f, 0.11f, 1f), new Color(1f, 1f, 1f, 0.12f), 2), Image.Type.Sliced, true);
+            var avatarFrameRt = avatarFrame.rectTransform;
+            avatarFrameRt.anchorMin = avatarFrameRt.anchorMax = avatarFrameRt.pivot = new Vector2(0f, 0.5f);
+            avatarFrameRt.sizeDelta = new Vector2(116, 124);
+            avatarFrameRt.anchoredPosition = new Vector2(24, 0);
+
+            // Vùng avatar/silhouette nằm riêng, không bị chữ hoặc màu nền phủ lên.
+            var thumbGo = CreateElement(avatarFrame.transform, "Thumb", typeof(RectTransform), typeof(Image));
             var thumbRt = thumbGo.GetComponent<RectTransform>();
-            thumbRt.anchorMin = Vector2.zero;
-            thumbRt.anchorMax = Vector2.one;
-            thumbRt.offsetMin = new Vector2(10, 10);
-            thumbRt.offsetMax = new Vector2(-10, -10);
-            
+            StretchFull(thumbRt);
+            thumbRt.offsetMin = new Vector2(7, 7);
+            thumbRt.offsetMax = new Vector2(-7, -7);
+
             var thumbImg = thumbGo.GetComponent<Image>();
             m_SlotThumbs[index] = thumbImg;
-            string avatarName = index == 0 ? "avatar_commander_host" : "avatar_commander_guest";
-            Sprite avatarSprite = LoadSpriteWithFallback(avatarName);
-            if (avatarSprite != null) {
-                thumbImg.sprite = avatarSprite;
-                thumbImg.color = new Color(0.18f, 0.22f, 0.24f, 1f);
-            } else {
-                thumbImg.sprite = CreateTankSilhouetteSprite(256, 150, new Color(0.18f, 0.22f, 0.24f, 1f));
-                thumbImg.color = Color.white;
-            }
+            thumbImg.preserveAspect = true;
+            thumbImg.sprite = CreateTankSilhouetteSprite(256, 150, new Color(0.18f, 0.22f, 0.24f, 1f));
+            thumbImg.color = new Color(0.16f, 0.22f, 0.25f, 0.72f);
 
-            var topShade = CreateImage(fill.transform, "TopShade",
-                CreateVerticalGradientSprite(new Color(0f, 0f, 0f, 0.72f), new Color(0f, 0f, 0f, 0.08f)), Image.Type.Simple, false);
-            topShade.rectTransform.anchorMin = new Vector2(0.03f, 0.70f);
-            topShade.rectTransform.anchorMax = new Vector2(0.97f, 0.97f);
-            topShade.rectTransform.offsetMin = Vector2.zero;
-            topShade.rectTransform.offsetMax = Vector2.zero;
+            var divider = CreateImage(fill.transform, "Divider",
+                CreateRoundedRectSprite(8, 0, new Color(1f, 1f, 1f, 0.12f), Color.clear, 0), Image.Type.Sliced, false);
+            divider.rectTransform.anchorMin = divider.rectTransform.anchorMax = divider.rectTransform.pivot = new Vector2(0f, 0.5f);
+            divider.rectTransform.sizeDelta = new Vector2(2, 104);
+            divider.rectTransform.anchoredPosition = new Vector2(154, 0);
 
-            var bottomShade = CreateImage(fill.transform, "BottomShade",
-                CreateVerticalGradientSprite(new Color(0f, 0f, 0f, 0.10f), new Color(0f, 0f, 0f, 0.76f)), Image.Type.Simple, false);
-            bottomShade.rectTransform.anchorMin = new Vector2(0.03f, 0.03f);
-            bottomShade.rectTransform.anchorMax = new Vector2(0.97f, 0.32f);
-            bottomShade.rectTransform.offsetMin = Vector2.zero;
-            bottomShade.rectTransform.offsetMax = Vector2.zero;
+            var name = CreateTMP(fill.transform, "Name", "", 27, FontStyles.Bold, Color.white, TextAlignmentOptions.Left);
+            name.rectTransform.anchorMin = new Vector2(0f, 0.52f);
+            name.rectTransform.anchorMax = new Vector2(1f, 0.82f);
+            name.rectTransform.offsetMin = new Vector2(172, 0);
+            name.rectTransform.offsetMax = new Vector2(-18, 0);
 
-            // Tên người chơi nằm trên đầu card, không hiển thị tên tank.
-            var name = CreateTMP(fill.transform, "Name", "", 32, FontStyles.Bold, Color.white, TextAlignmentOptions.Center);
-            name.rectTransform.anchorMin = new Vector2(0, 0.82f);
-            name.rectTransform.anchorMax = new Vector2(1, 0.98f);
-            name.rectTransform.offsetMin = new Vector2(18, 0);
-            name.rectTransform.offsetMax = new Vector2(-18, -6);
-
-            var state = CreateTMP(fill.transform, "State", "ĐANG QUÉT...", 24,
-                FontStyles.Bold | FontStyles.Italic, m_CyanColor, TextAlignmentOptions.Center);
-            state.rectTransform.anchorMin = new Vector2(0, 0.04f);
-            state.rectTransform.anchorMax = new Vector2(1, 0.16f);
-            state.rectTransform.offsetMin = new Vector2(18, 0);
+            var state = CreateTMP(fill.transform, "State", "ĐANG CHỜ...", 16,
+                FontStyles.Bold | FontStyles.Italic, m_CyanColor, TextAlignmentOptions.Left);
+            state.rectTransform.anchorMin = new Vector2(0f, 0.24f);
+            state.rectTransform.anchorMax = new Vector2(1f, 0.48f);
+            state.rectTransform.offsetMin = new Vector2(172, 0);
             state.rectTransform.offsetMax = new Vector2(-18, 0);
             m_SlotStateLabels[index] = state;
 
@@ -404,22 +473,27 @@ namespace Tanks.Complete
         {
             var cardGo = CreateElement(parent, "MapPick_" + mapName, typeof(RectTransform));
             var rt = cardGo.GetComponent<RectTransform>();
-            rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 1f);
-            rt.sizeDelta = new Vector2(220, 120);
-            rt.anchoredPosition = new Vector2(posX, 220);
+            rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.sizeDelta = new Vector2(112, 82);
+            rt.anchoredPosition = new Vector2(posX, 18);
 
-            // Nền thẻ bản đồ (Border & Background)
+            var glow = CreateImage(cardGo.transform, "SelectedGlow",
+                CreateRoundedRectSprite(36, 16, Color.white, Color.clear, 0), Image.Type.Sliced, true);
+            StretchFull(glow.rectTransform);
+            glow.rectTransform.offsetMin = new Vector2(-7, -7);
+            glow.rectTransform.offsetMax = new Vector2(7, 7);
+            glow.raycastTarget = false;
+
             var fill = CreateImage(cardGo.transform, "Fill",
-                CreateRoundedRectSprite(32, 20, new Color(0.1f, 0.1f, 0.1f), m_OutlineColor, 4), Image.Type.Sliced, true);
+                CreateRoundedRectSprite(32, 14, new Color(0.055f, 0.065f, 0.075f), new Color(1f, 1f, 1f, 0.20f), 2), Image.Type.Sliced, true);
             m_MapPickFills[index] = fill;
             StretchFull(fill.rectTransform);
 
-            // Ảnh thu nhỏ bản đồ (Tràn viền)
             var thumbGo = CreateElement(fill.transform, "Thumb", typeof(RectTransform), typeof(Image));
             var thumbRt = thumbGo.GetComponent<RectTransform>();
             StretchFull(thumbRt);
-            thumbRt.offsetMin = new Vector2(4, 4);
-            thumbRt.offsetMax = new Vector2(-4, -4);
+            thumbRt.offsetMin = new Vector2(3, 3);
+            thumbRt.offsetMax = new Vector2(-3, -3);
             
             var thumbImg = thumbGo.GetComponent<Image>();
             thumbImg.color = Color.white; 
@@ -431,11 +505,15 @@ namespace Tanks.Complete
                 thumbImg.color = m_CardColor1;
             }
 
-            // Tên bản đồ (Nằm dưới cùng, đè lên ảnh với nền đen bán trong suốt)
+            var shade = CreateImage(thumbGo.transform, "UnselectedShade",
+                CreateRoundedRectSprite(16, 0, Color.white, Color.clear, 0), Image.Type.Sliced, true);
+            StretchFull(shade.rectTransform);
+            shade.raycastTarget = false;
+
             var nameBgGo = CreateElement(thumbGo.transform, "NameBg", typeof(RectTransform), typeof(Image));
             var nameBgRt = nameBgGo.GetComponent<RectTransform>();
             nameBgRt.anchorMin = new Vector2(0, 0);
-            nameBgRt.anchorMax = new Vector2(1, 0.35f);
+            nameBgRt.anchorMax = new Vector2(1, 0.34f);
             nameBgRt.offsetMin = Vector2.zero;
             nameBgRt.offsetMax = Vector2.zero;
             
@@ -443,13 +521,40 @@ namespace Tanks.Complete
             nameBgImg.sprite = CreateRoundedRectSprite(16, 0, new Color(0, 0, 0, 0.7f), Color.clear, 0);
             nameBgImg.type = Image.Type.Sliced;
 
-            var nameTxt = CreateTMP(nameBgGo.transform, "Name", mapName.ToUpper(), 22, FontStyles.Bold, Color.white, TextAlignmentOptions.Center);
+            var nameTxt = CreateTMP(nameBgGo.transform, "Name", mapName.ToUpper(), 14, FontStyles.Bold, Color.white, TextAlignmentOptions.Center);
             StretchFull(nameTxt.rectTransform);
+            nameTxt.raycastTarget = false;
+
+            var frame = CreateImage(cardGo.transform, "SelectionFrame",
+                CreateRoundedRectSprite(36, 16, Color.clear, Color.white, 4), Image.Type.Sliced, true);
+            StretchFull(frame.rectTransform);
+            frame.raycastTarget = false;
+
+            var badge = CreateImage(cardGo.transform, "SelectedBadge",
+                CreateRoundedRectSprite(40, 20, m_PlayButtonColor, new Color(0.10f, 0.08f, 0.02f, 0.95f), 3), Image.Type.Sliced, false);
+            badge.rectTransform.anchorMin = badge.rectTransform.anchorMax = badge.rectTransform.pivot = new Vector2(1f, 1f);
+            badge.rectTransform.sizeDelta = new Vector2(30, 30);
+            badge.rectTransform.anchoredPosition = new Vector2(6, 6);
+            badge.raycastTarget = false;
+            var badgeLabel = CreateTMP(badge.transform, "Label", "✓", 19, FontStyles.Bold, m_TextDark, TextAlignmentOptions.Center);
+            StretchFull(badgeLabel.rectTransform);
+            badgeLabel.raycastTarget = false;
 
             // Thêm nút bấm bao toàn bộ thẻ
             var btn = cardGo.AddComponent<Button>();
             btn.targetGraphic = fill;
+            var colors = btn.colors;
+            colors.disabledColor = Color.white;
+            btn.colors = colors;
             btn.onClick.AddListener(() => SelectMap(mapName));
+            m_MapPickButtons[index] = btn;
+
+            var vibe = cardGo.AddComponent<UIButtonVibe>();
+            vibe.clickSound = m_ClickSound;
+
+            var selectionVisual = cardGo.AddComponent<UIMapSelectionVisual>();
+            selectionVisual.Configure(m_PlayButtonColor, glow, frame, shade, badge.gameObject, nameTxt, vibe);
+            m_MapPickVisuals[index] = selectionVisual;
 
             return cardGo;
         }
@@ -526,7 +631,7 @@ namespace Tanks.Complete
             }
         }
 
-        private void OnStartMatchClicked()
+        private async void OnStartMatchClicked()
         {
             if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsHost)
             {
@@ -537,6 +642,51 @@ namespace Tanks.Complete
             if (NetworkManager.Singleton.ConnectedClientsList.Count < requiredPlayers)
             {
                 SetLobbyStatus($"Cần đủ {requiredPlayers} người chơi mới bắt đầu được.");
+                return;
+            }
+
+            EnsureHostConnectedProfiles();
+            var roster = new System.Collections.Generic.Dictionary<ulong, int>();
+            foreach (var client in NetworkManager.Singleton.ConnectedClientsList)
+            {
+                if (!m_LobbyProfiles.TryGetValue(client.ClientId, out var profile))
+                {
+                    SetLobbyStatus("Chưa đồng bộ đủ danh sách người chơi. Vui lòng thử lại.");
+                    return;
+                }
+                roster[client.ClientId] = profile.Team;
+            }
+
+            if (m_IsTeam2v2)
+            {
+                int blue = 0;
+                int red = 0;
+                foreach (int team in roster.Values)
+                {
+                    if (team == 0) blue++;
+                    else if (team == 1) red++;
+                }
+
+                if (blue != 2 || red != 2)
+                {
+                    SetLobbyStatus("Mỗi đội phải có đúng 2 người trước khi bắt đầu.");
+                    return;
+                }
+            }
+
+            NetworkLobbyManager.Instance?.ConfigureMatchRoster(m_IsTeam2v2, roster);
+            if (NetworkLobbyManager.Instance == null ||
+                !await NetworkLobbyManager.Instance.LockCurrentSessionAsync())
+            {
+                SetLobbyStatus("Không thể khoá phòng. Trận đấu chưa bắt đầu.");
+                return;
+            }
+
+            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsHost ||
+                NetworkManager.Singleton.ConnectedClientsList.Count != requiredPlayers)
+            {
+                await NetworkLobbyManager.Instance.UnlockCurrentSessionAsync();
+                SetLobbyStatus("Có người vừa rời phòng. Hãy chờ đủ người rồi thử lại.");
                 return;
             }
             SetLobbyStatus($"Đang tải bản đồ {m_SelectedMap}...");
@@ -559,13 +709,40 @@ namespace Tanks.Complete
 
         private void SelectMap(string map)
         {
+            int mapIndex = System.Array.IndexOf(k_Lobby1v1Maps, map);
+            if (mapIndex < 0) return;
+
+            var nm = NetworkManager.Singleton;
+            if (nm != null && nm.IsListening && !nm.IsHost)
+                return;
+
+            ApplySelectedMap(map);
+
+            // Host là nguồn dữ liệu duy nhất. Gửi kèm map trong full lobby state để cả
+            // khách hiện tại và người vào muộn đều thấy cùng lựa chọn.
+            if (nm != null && nm.IsHost)
+                BroadcastAllProfiles();
+        }
+
+        private void ApplySelectedMap(string map)
+        {
+            int mapIndex = System.Array.IndexOf(k_Lobby1v1Maps, map);
+            if (mapIndex < 0) return;
+
             m_SelectedMap = map;
             for (int i = 0; i < k_Lobby1v1Maps.Length; i++)
             {
-                if (m_MapPickFills[i] == null) continue;
                 bool selected = k_Lobby1v1Maps[i] == map;
-                m_MapPickFills[i].color = selected ? m_PlayButtonColor : new Color(0.2f, 0.2f, 0.2f, 1f);
+                if (m_MapPickFills[i] != null)
+                    m_MapPickFills[i].color = selected ? Color.white : new Color(0.76f, 0.78f, 0.80f, 1f);
+                if (m_MapPickVisuals[i] != null)
+                    m_MapPickVisuals[i].SetSelected(selected, !m_MapSelectionInitialized);
             }
+
+            if (m_SelectedMapLabel != null)
+                m_SelectedMapLabel.text = $"ĐÃ CHỌN  •  {map.ToUpperInvariant()}";
+
+            m_MapSelectionInitialized = true;
         }
 
         // =====================================================================
@@ -619,15 +796,25 @@ namespace Tanks.Complete
             ISession session = lobby.CurrentSession;
             bool isHost = nm != null && nm.IsHost;
 
+            if (isHost)
+                EnsureHostConnectedProfiles();
+
             // Số người thật sự đang kết nối, không phải số profile đã nhận được. Chủ phòng chỉ được
             // bắt đầu khi có đủ người trên đường truyền, kể cả khi một gói ProfileSync bị lạc.
             int connected = nm != null && nm.IsListening ? nm.ConnectedClientsList.Count : 0;
 
             if (m_CodeLabel != null) m_CodeLabel.text = session != null ? session.Code : "------";
 
-            // Sắp xếp các Profile theo ClientId để hiển thị cố định
+            // 2v2: xếp Đội Xanh vào hai slot trái, Đội Đỏ vào hai slot phải.
+            // Trong cùng một đội dùng ClientId để thứ tự không nhảy giữa các frame.
             var sortedProfiles = new System.Collections.Generic.List<ProfileInfoMessage>(m_LobbyProfiles.Values);
-            sortedProfiles.Sort((a, b) => a.ClientId.CompareTo(b.ClientId));
+            if (nm != null && nm.IsListening)
+                sortedProfiles.RemoveAll(profile => !nm.ConnectedClients.ContainsKey(profile.ClientId));
+            sortedProfiles.Sort((a, b) =>
+            {
+                int teamOrder = m_IsTeam2v2 ? a.Team.CompareTo(b.Team) : 0;
+                return teamOrder != 0 ? teamOrder : a.ClientId.CompareTo(b.ClientId);
+            });
 
             for (int i = 0; i < m_SlotNames.Length; i++)
             {
@@ -638,20 +825,43 @@ namespace Tanks.Complete
                 ApplySlotVisuals(i, filled, displayName, avatarId);
             }
 
-            if (m_HostControls != null) m_HostControls.SetActive(isHost);
+            if (m_HostControls != null) m_HostControls.SetActive(true);
+            if (m_StartMatchButtonGo != null) m_StartMatchButtonGo.SetActive(isHost);
             if (m_WaitingLabelGo != null) m_WaitingLabelGo.SetActive(!isHost);
+            for (int i = 0; i < m_MapPickButtons.Length; i++)
+                if (m_MapPickButtons[i] != null) m_MapPickButtons[i].interactable = isHost;
             int requiredPlayers = RequiredOnlinePlayers;
-            if (m_StartMatchButton != null) m_StartMatchButton.interactable = isHost && connected >= requiredPlayers;
+            int blueCount = 0;
+            int redCount = 0;
+            foreach (var profile in sortedProfiles)
+            {
+                if (profile.Team == 0) blueCount++;
+                else redCount++;
+            }
+            bool balancedTeams = !m_IsTeam2v2 || (blueCount == 2 && redCount == 2);
+            bool readyToStart = connected == requiredPlayers && sortedProfiles.Count == requiredPlayers && balancedTeams;
+            if (m_StartMatchButton != null) m_StartMatchButton.interactable = isHost && readyToStart;
 
-            SetDefaultStatus(connected >= requiredPlayers
-                ? (m_IsTeam2v2 ? "Hai đội đã đủ người. Sẵn sàng chiến đấu." : "Hai bên đã đủ người. Sẵn sàng chiến đấu.")
-                : $"Đang chờ người chơi... ({connected}/{requiredPlayers})");
+            if (connected < requiredPlayers)
+                SetDefaultStatus($"Đang chờ người chơi... ({connected}/{requiredPlayers})");
+            else if (!balancedTeams)
+                SetDefaultStatus("Mỗi đội cần đúng 2 người. Hãy dùng nút ĐỔI ĐỘI.");
+            else
+                SetDefaultStatus(m_IsTeam2v2 ? "Hai đội đã đủ người. Sẵn sàng chiến đấu." : "Hai bên đã đủ người. Sẵn sàng chiến đấu.");
         }
 
         // RefreshRoom chạy mỗi frame. LoadSpriteWithFallback có thể gọi Sprite.Create, nên nạp lại
         // avatar vô điều kiện sẽ sinh một Sprite mới mỗi frame. Chỉ chạm vào UI khi dữ liệu đổi.
         private readonly string[] m_SlotAppliedAvatar = new string[k_MaxOnlinePlayers];
         private readonly string[] m_SlotAppliedName = new string[k_MaxOnlinePlayers];
+
+        private Color GetSlotAccentColor(int index)
+        {
+            if (m_IsTeam2v2)
+                return index < 2 ? m_CyanColor : m_CardColor1;
+
+            return index == 0 ? m_CyanColor : m_CardColor1;
+        }
 
         private void ApplySlotVisuals(int i, bool filled, string displayName, string avatarId)
         {
@@ -664,8 +874,7 @@ namespace Tanks.Complete
 
             if (m_SlotFills[i] != null)
             {
-                Color filledColor = i < 2 ? m_CyanColor : m_CardColor1;
-                m_SlotFills[i].color = filled ? filledColor : new Color(0.15f, 0.15f, 0.15f, 0.8f);
+                m_SlotFills[i].color = filled ? Color.white : new Color(0.70f, 0.72f, 0.74f, 0.86f);
 
                 if (m_SlotThumbs[i] != null)
                 {
@@ -674,7 +883,7 @@ namespace Tanks.Complete
                         var s = LoadSpriteWithFallback(avatarId);
                         if (s != null) m_SlotThumbs[i].sprite = s;
                     }
-                    else if (!filled && m_SlotThumbs[i].sprite == null)
+                    else if (!filled)
                     {
                         m_SlotThumbs[i].sprite = CreateTankSilhouetteSprite(256, 150, new Color(0.18f, 0.22f, 0.24f, 1f));
                     }
@@ -688,13 +897,13 @@ namespace Tanks.Complete
 
             if (m_SlotStateLabels[i] != null)
             {
-                m_SlotStateLabels[i].text = filled ? "ĐÃ KHÓA" : "ĐANG QUÉT...";
-                m_SlotStateLabels[i].color = filled ? m_PlayButtonColor : m_CyanColor;
+                m_SlotStateLabels[i].text = filled ? "SẴN SÀNG" : "ĐANG CHỜ...";
+                m_SlotStateLabels[i].color = filled ? GetSlotAccentColor(i) : new Color(1f, 1f, 1f, 0.48f);
             }
 
             if (m_SlotNames[i] != null)
             {
-                m_SlotNames[i].text = displayName;
+                m_SlotNames[i].text = filled ? displayName : "VỊ TRÍ TRỐNG";
                 m_SlotNames[i].color = filled ? Color.white : new Color(1f, 1f, 1f, 0.4f);
             }
         }
@@ -749,11 +958,23 @@ namespace Tanks.Complete
         private void ApplyOnlineModeLayout()
         {
             if (m_OnlineLobbyTitle != null)
-                m_OnlineLobbyTitle.text = m_IsTeam2v2 ? "ĐẤU ĐỘI 2v2" : "ĐẤU TRƯỜNG 1v1";
+                m_OnlineLobbyTitle.text = m_IsTeam2v2 ? "PHÒNG ĐẤU 2v2" : "PHÒNG ĐẤU 1v1";
             if (m_VsLabel != null)
-                m_VsLabel.text = m_IsTeam2v2 ? "TEAM\nVS\nTEAM" : "VS";
+                m_VsLabel.text = "VS";
+            if (m_ChangeTeamButtonGo != null)
+                m_ChangeTeamButtonGo.SetActive(m_IsTeam2v2);
+            if (m_BlueTeamHeaderGo != null)
+                m_BlueTeamHeaderGo.SetActive(m_IsTeam2v2);
+            if (m_RedTeamHeaderGo != null)
+                m_RedTeamHeaderGo.SetActive(m_IsTeam2v2);
 
-            float[] teamXs = { -510f, -180f, 180f, 510f };
+            Vector2[] teamPositions =
+            {
+                new Vector2(-475f, 105f),
+                new Vector2(-475f, -86f),
+                new Vector2(475f, 105f),
+                new Vector2(475f, -86f)
+            };
             for (int i = 0; i < m_RoomSlots.Length; i++)
             {
                 if (m_RoomSlots[i] == null) continue;
@@ -763,8 +984,15 @@ namespace Tanks.Complete
 
                 var rt = m_RoomSlots[i].GetComponent<RectTransform>();
                 rt.anchoredPosition = m_IsTeam2v2
-                    ? new Vector2(teamXs[i], 70f)
-                    : new Vector2(i == 0 ? -420f : 420f, 70f);
+                    ? teamPositions[i]
+                    : new Vector2(i == 0 ? -475f : 475f, 8f);
+
+                if (m_SlotTeamBars[i] != null)
+                    m_SlotTeamBars[i].color = GetSlotAccentColor(i);
+
+                // Ép ApplySlotVisuals chạy lại khi đổi layout/mode vì cùng profile nhưng màu đội khác.
+                m_SlotAppliedName[i] = null;
+                m_SlotAppliedAvatar[i] = null;
             }
         }
 
@@ -795,6 +1023,7 @@ namespace Tanks.Complete
                 {
                     NetworkManager.Singleton.CustomMessagingManager.UnregisterNamedMessageHandler("ProfileSync");
                     NetworkManager.Singleton.CustomMessagingManager.UnregisterNamedMessageHandler("FullProfileSync");
+                    NetworkManager.Singleton.CustomMessagingManager.UnregisterNamedMessageHandler("TeamChangeRequest");
                 }
             }
 
@@ -845,6 +1074,7 @@ namespace Tanks.Complete
                     NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
                     NetworkManager.Singleton.CustomMessagingManager.RegisterNamedMessageHandler("ProfileSync", OnProfileSyncMessage);
                     NetworkManager.Singleton.CustomMessagingManager.RegisterNamedMessageHandler("FullProfileSync", OnFullProfileSync);
+                    NetworkManager.Singleton.CustomMessagingManager.RegisterNamedMessageHandler("TeamChangeRequest", OnTeamChangeRequest);
                     m_NetcodeEventsHooked = true;
                     
                     if (NetworkManager.Singleton.IsHost)
@@ -893,6 +1123,7 @@ namespace Tanks.Complete
                 {
                     NetworkManager.Singleton.CustomMessagingManager.UnregisterNamedMessageHandler("ProfileSync");
                     NetworkManager.Singleton.CustomMessagingManager.UnregisterNamedMessageHandler("FullProfileSync");
+                    NetworkManager.Singleton.CustomMessagingManager.UnregisterNamedMessageHandler("TeamChangeRequest");
                 }
                 m_NetcodeEventsHooked = false;
             }
@@ -910,7 +1141,7 @@ namespace Tanks.Complete
         {
             if (!m_LobbyProfiles.Remove(clientId)) return;
 
-            SetLobbyStatus("Đối thủ đã rời phòng.");
+            SetLobbyStatus("Một người chơi đã rời phòng.");
             BroadcastAllProfiles();
             RefreshLobby();
         }
@@ -923,19 +1154,61 @@ namespace Tanks.Complete
         {
             if (NetworkManager.Singleton == null) return;
             ulong myId = NetworkManager.Singleton.LocalClientId;
+            int team = m_LobbyProfiles.TryGetValue(myId, out var current)
+                ? current.Team
+                : ChooseBalancedTeam();
             m_LobbyProfiles[myId] = new ProfileInfoMessage {
                 ClientId = myId,
                 DisplayName = ProfileManager.Instance?.DisplayName ?? "Player",
-                AvatarId = ProfileManager.Instance?.AvatarId ?? "avatar_1"
+                AvatarId = ProfileManager.Instance?.AvatarId ?? "avatar_1",
+                Team = team
             };
+        }
+
+        // Host luôn tạo placeholder cho mọi kết nối thật. Vì vậy một gói ProfileSync bị lạc
+        // không làm roster thiếu người hoặc khiến nút Bắt đầu dùng sai slot.
+        private void EnsureHostConnectedProfiles()
+        {
+            var nm = NetworkManager.Singleton;
+            if (nm == null || !nm.IsHost) return;
+
+            bool changed = false;
+            foreach (var client in nm.ConnectedClientsList)
+            {
+                if (m_LobbyProfiles.ContainsKey(client.ClientId)) continue;
+
+                bool isLocal = client.ClientId == nm.LocalClientId;
+                m_LobbyProfiles[client.ClientId] = new ProfileInfoMessage
+                {
+                    ClientId = client.ClientId,
+                    DisplayName = isLocal ? (ProfileManager.Instance?.DisplayName ?? "Player") : "Player",
+                    AvatarId = isLocal ? (ProfileManager.Instance?.AvatarId ?? "avatar_1") : "avatar_1",
+                    Team = ChooseBalancedTeam()
+                };
+                changed = true;
+            }
+
+            if (changed)
+                BroadcastAllProfiles();
+        }
+
+        private int ChooseBalancedTeam()
+        {
+            int blue = 0;
+            int red = 0;
+            foreach (var profile in m_LobbyProfiles.Values)
+            {
+                if (profile.Team == 0) blue++;
+                else red++;
+            }
+            return blue <= red ? 0 : 1;
         }
 
         private void OnClientConnected(ulong clientId)
         {
             if (NetworkManager.Singleton.IsHost)
             {
-                // Khi có người mới vào, Broadcast toàn bộ lại
-                BroadcastAllProfiles();
+                EnsureHostConnectedProfiles();
             }
             else if (clientId == NetworkManager.Singleton.LocalClientId)
             {
@@ -948,6 +1221,7 @@ namespace Tanks.Complete
         private const int k_MaxNameLength = 24;
         private const int k_ProfileBufferSize = 512;
         private const int k_ProfileBufferMax = 8 * 1024;
+        private const int k_LobbyStateVersion = 1;
 
         private static string Sanitize(string value, string fallback)
         {
@@ -970,6 +1244,8 @@ namespace Tanks.Complete
 
         private void OnProfileSyncMessage(ulong senderId, FastBufferReader payload)
         {
+            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsHost) return;
+
             string displayName, avatarId;
             try
             {
@@ -984,10 +1260,14 @@ namespace Tanks.Complete
 
             // Khoá theo senderId do Netcode cung cấp, KHÔNG theo id trong payload: người gửi
             // không được phép tự khai mình là ai (nếu không họ ghi đè được profile của chủ phòng).
+            int team = m_LobbyProfiles.TryGetValue(senderId, out var current)
+                ? current.Team
+                : ChooseBalancedTeam();
             m_LobbyProfiles[senderId] = new ProfileInfoMessage {
                 ClientId = senderId,
                 DisplayName = Sanitize(displayName, "Player"),
-                AvatarId = Sanitize(avatarId, "avatar_1")
+                AvatarId = Sanitize(avatarId, "avatar_1"),
+                Team = team
             };
 
             if (NetworkManager.Singleton.IsHost)
@@ -1003,12 +1283,16 @@ namespace Tanks.Complete
 
             var writer = new FastBufferWriter(k_ProfileBufferSize, Unity.Collections.Allocator.Temp, k_ProfileBufferMax);
             using (writer) {
+                writer.WriteValueSafe(k_LobbyStateVersion);
+                writer.WriteValueSafe(m_IsTeam2v2);
+                writer.WriteValueSafe(System.Array.IndexOf(k_Lobby1v1Maps, m_SelectedMap));
                 writer.WriteValueSafe(m_LobbyProfiles.Count);
                 foreach (var kvp in m_LobbyProfiles)
                 {
                     writer.WriteValueSafe(kvp.Value.ClientId);
                     writer.WriteValueSafe(kvp.Value.DisplayName);
                     writer.WriteValueSafe(kvp.Value.AvatarId);
+                    writer.WriteValueSafe(kvp.Value.Team);
                 }
                 NetworkManager.Singleton.CustomMessagingManager.SendNamedMessageToAll("FullProfileSync", writer);
             }
@@ -1017,22 +1301,41 @@ namespace Tanks.Complete
         private void OnFullProfileSync(ulong senderId, FastBufferReader payload)
         {
             if (NetworkManager.Singleton.IsHost) return;
+            if (senderId != NetworkManager.ServerClientId) return;
 
             var received = new System.Collections.Generic.Dictionary<ulong, ProfileInfoMessage>();
             try
             {
+                payload.ReadValueSafe(out int stateVersion);
+                if (stateVersion != k_LobbyStateVersion)
+                    throw new System.InvalidOperationException("Phiên bản lobby state không tương thích.");
+
+                payload.ReadValueSafe(out bool teamMode);
+                payload.ReadValueSafe(out int selectedMapIndex);
+                if (selectedMapIndex < 0 || selectedMapIndex >= k_Lobby1v1Maps.Length)
+                    throw new System.InvalidOperationException("Chỉ số bản đồ không hợp lệ.");
+
                 payload.ReadValueSafe(out int count);
+                if (count < 0 || count > k_MaxOnlinePlayers)
+                    throw new System.InvalidOperationException("Số profile vượt giới hạn lobby.");
                 for (int i = 0; i < count; i++)
                 {
                     payload.ReadValueSafe(out ulong cId);
                     payload.ReadValueSafe(out string dName);
                     payload.ReadValueSafe(out string aId);
+                    payload.ReadValueSafe(out int team);
                     received[cId] = new ProfileInfoMessage {
                         ClientId = cId,
                         DisplayName = Sanitize(dName, "Player"),
-                        AvatarId = Sanitize(aId, "avatar_1")
+                        AvatarId = Sanitize(aId, "avatar_1"),
+                        Team = Mathf.Clamp(team, 0, 1)
                     };
                 }
+
+                if (m_IsTeam2v2 != teamMode)
+                    SetOnlineMode(teamMode);
+
+                ApplySelectedMap(k_Lobby1v1Maps[selectedMapIndex]);
             }
             catch (System.Exception e)
             {
@@ -1043,6 +1346,79 @@ namespace Tanks.Complete
 
             m_LobbyProfiles = received;
             RefreshLobby();
+        }
+
+        private void OnChangeTeamClicked()
+        {
+            var nm = NetworkManager.Singleton;
+            if (!m_IsTeam2v2 || nm == null || !nm.IsListening) return;
+            if (!m_LobbyProfiles.TryGetValue(nm.LocalClientId, out var profile))
+            {
+                SetLobbyStatus("Đang đồng bộ đội. Vui lòng thử lại.");
+                return;
+            }
+
+            int targetTeam = 1 - profile.Team;
+            int targetCount = 0;
+            foreach (var player in m_LobbyProfiles.Values)
+                if (player.Team == targetTeam) targetCount++;
+
+            if (targetCount >= 2)
+            {
+                SetLobbyStatus(targetTeam == 0 ? "Đội Xanh đã đủ 2 người." : "Đội Đỏ đã đủ 2 người.");
+                return;
+            }
+
+            if (nm.IsHost)
+            {
+                TryChangeTeam(nm.LocalClientId, targetTeam);
+                return;
+            }
+
+            if (nm.CustomMessagingManager == null) return;
+            var writer = new FastBufferWriter(sizeof(int), Unity.Collections.Allocator.Temp);
+            using (writer)
+            {
+                writer.WriteValueSafe(targetTeam);
+                nm.CustomMessagingManager.SendNamedMessage("TeamChangeRequest", NetworkManager.ServerClientId, writer);
+            }
+            SetLobbyStatus("Đã gửi yêu cầu đổi đội.");
+        }
+
+        private void OnTeamChangeRequest(ulong senderId, FastBufferReader payload)
+        {
+            var nm = NetworkManager.Singleton;
+            if (nm == null || !nm.IsHost || !m_IsTeam2v2) return;
+
+            try
+            {
+                payload.ReadValueSafe(out int targetTeam);
+                TryChangeTeam(senderId, targetTeam);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"[Lobby1v1] Bỏ qua TeamChangeRequest hỏng từ client {senderId}: {e.Message}");
+            }
+        }
+
+        private void TryChangeTeam(ulong clientId, int targetTeam)
+        {
+            var nm = NetworkManager.Singleton;
+            if (nm == null || !nm.IsHost || !nm.ConnectedClients.ContainsKey(clientId)) return;
+            if (!m_LobbyProfiles.TryGetValue(clientId, out var profile)) return;
+
+            targetTeam = Mathf.Clamp(targetTeam, 0, 1);
+            if (profile.Team == targetTeam) return;
+
+            int targetCount = 0;
+            foreach (var player in m_LobbyProfiles.Values)
+                if (player.Team == targetTeam) targetCount++;
+            if (targetCount >= 2) return;
+
+            profile.Team = targetTeam;
+            m_LobbyProfiles[clientId] = profile;
+            BroadcastAllProfiles();
+            SetLobbyStatus(targetTeam == 0 ? "Đã chuyển sang Đội Xanh." : "Đã chuyển sang Đội Đỏ.");
         }
     }
 }

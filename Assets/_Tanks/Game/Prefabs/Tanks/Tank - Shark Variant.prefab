@@ -64,6 +64,26 @@ PrefabInstance:
       propertyPath: m_Constraints
       value: 116
       objectReference: {fileID: 0}
+    - target: {fileID: 6507708, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
+      propertyPath: m_Size.x
+      value: 2
+      objectReference: {fileID: 0}
+    - target: {fileID: 6507708, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
+      propertyPath: m_Size.y
+      value: 1.8
+      objectReference: {fileID: 0}
+    - target: {fileID: 6507708, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
+      propertyPath: m_Size.z
+      value: 2.3
+      objectReference: {fileID: 0}
+    - target: {fileID: 6507708, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
+      propertyPath: m_Center.y
+      value: 0.9
+      objectReference: {fileID: 0}
+    - target: {fileID: 6507708, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
+      propertyPath: m_Center.z
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 11409376, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
       propertyPath: m_StartingHealth
       value: 225
@@ -113,11 +133,6 @@ PrefabInstance:
       addedObject: {fileID: 7407967995094973317}
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
---- !u!1 &2259141219951711155 stripped
-GameObject:
-  m_CorrespondingSourceObject: {fileID: 173472, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}
-  m_PrefabInstance: {fileID: 2259141219951621651}
-  m_PrefabAsset: {fileID: 0}
 --- !u!4 &2259141219951999201 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 446194, guid: 756d3a6506f2f8241b4e8badde68567a, type: 3}

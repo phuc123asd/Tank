@@ -13,10 +13,36 @@ namespace Tanks.Complete
 
         private Vector3 m_OriginalScale;
         private bool m_IsHovered;
+        private bool m_HasCustomRestScale;
+
+        private void Awake()
+        {
+            m_OriginalScale = transform.localScale;
+        }
 
         private void Start()
         {
-            m_OriginalScale = transform.localScale;
+            // Preserve the original behaviour for ordinary buttons whose scale may be
+            // configured after AddComponent but before their first frame.
+            if (!m_HasCustomRestScale)
+                m_OriginalScale = transform.localScale;
+        }
+
+        /// <summary>
+        /// Updates the scale that hover/press animations return to. Selection visuals use
+        /// this so a highlighted card stays enlarged after the pointer leaves it.
+        /// </summary>
+        public void SetRestScale(Vector3 restScale, bool animate)
+        {
+            m_HasCustomRestScale = true;
+            m_OriginalScale = restScale;
+            Vector3 target = m_IsHovered ? m_OriginalScale * 1.05f : m_OriginalScale;
+
+            StopAllCoroutines();
+            if (animate && isActiveAndEnabled)
+                StartCoroutine(ScaleTo(target, 0.16f));
+            else
+                transform.localScale = target;
         }
 
         public void OnPointerEnter(PointerEventData eventData)

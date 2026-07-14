@@ -24,7 +24,6 @@ namespace Tanks.Complete
         [HideInInspector] public GameObject m_Instance;         // A reference to the instance of the tank when it is created.
         [HideInInspector] public int m_Wins;                    // The number of wins this player has so far.
         [HideInInspector] public bool m_ComputerControlled;     // Is that tank computer controlled
-        
         public int ControlIndex { get; set; } = 1;              //this defines the index of the control 1 = left keyboard or pad, 2 = right keyboard, -1 = no control
 
 
@@ -64,8 +63,8 @@ namespace Tanks.Complete
                 m_AI.Setup(manager);
             }
             
-            // Create a string using the correct color that says 'PLAYER 1' etc based on the tank's color and the player's number.
-            m_ColoredPlayerText = "<color=#" + ColorUtility.ToHtmlStringRGB(m_PlayerColor) + ">PLAYER " + m_PlayerNumber + "</color>";
+            // Create a localized player label using the tank/team color.
+            m_ColoredPlayerText = "<color=#" + ColorUtility.ToHtmlStringRGB(m_PlayerColor) + ">NGƯỜI CHƠI " + m_PlayerNumber + "</color>";
 
             // Get all of the renderers of the tank.
             MeshRenderer[] renderers = m_Instance.GetComponentsInChildren<MeshRenderer> ();
@@ -84,6 +83,7 @@ namespace Tanks.Complete
                     }
                 }
             }
+
         }
 
 

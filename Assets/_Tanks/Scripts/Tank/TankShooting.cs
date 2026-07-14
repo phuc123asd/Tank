@@ -235,18 +235,19 @@ namespace Tanks.Complete
             Debug.Log($"[Shoot] FireServerRpc chạy trên server cho '{name}' (owner={OwnerClientId}).");
             Rigidbody shellInstance = Instantiate (m_Shell, spawnPos, spawnRot) as Rigidbody;
             var netObj = shellInstance.GetComponent<NetworkObject>();
-            netObj.Spawn();
-            shellInstance.linearVelocity = launchForce * (spawnRot * Vector3.forward);
-
             ShellExplosion explosionData = shellInstance.GetComponent<ShellExplosion>();
             explosionData.m_ExplosionForce = m_ExplosionForce;
             explosionData.m_ExplosionRadius = m_ExplosionRadius;
             explosionData.m_MaxDamage = m_MaxDamage;
+            explosionData.InitializeNetworkShot(OwnerClientId);
 
             if (hasSpecial)
             {
                 explosionData.m_MaxDamage *= specialMultiplier;
             }
+
+            netObj.Spawn();
+            shellInstance.linearVelocity = launchForce * (spawnRot * Vector3.forward);
 
             FireClientRpc(launchForce, netObj.NetworkObjectId);
         }
@@ -284,7 +285,14 @@ namespace Tanks.Complete
             float chargeLevel = Mathf.Lerp (m_MinLaunchForce, m_MaxLaunchForce, chargingLevel);
             Vector3 velocity = chargeLevel * m_FireTransform.forward; 
             
-            float a = 0.5f * Physics.gravity.y;
+            float gravityY = Physics.gravity.y;
+            if (Mathf.Abs(gravityY) < 0.001f)
+            {
+                Vector3 flatVelocity = new Vector3(velocity.x, 0f, velocity.z);
+                return m_FireTransform.position + flatVelocity;
+            }
+
+            float a = 0.5f * gravityY;
             float b = velocity.y;
             float c = m_FireTransform.position.y;
             

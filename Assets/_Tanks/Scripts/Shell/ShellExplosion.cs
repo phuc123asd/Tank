@@ -1,4 +1,5 @@
-﻿using UnityEngine;
+﻿using System.Collections.Generic;
+using UnityEngine;
 using Unity.Netcode;
 
 namespace Tanks.Complete
@@ -14,8 +15,20 @@ namespace Tanks.Complete
         [HideInInspector] public float m_MaxDamage = 100f;                    // The amount of damage done if the explosion is centred on a tank.
         [HideInInspector] public float m_ExplosionForce = 50f;                // The amount of force added to a tank at the centre of the explosion.
         [HideInInspector] public float m_ExplosionRadius = 5f;                // The maximum distance away from the explosion tanks can be and are still affected.
+        [SerializeField] private float m_SweepRadius = 0.22f;
 
         private bool m_Exploded;
+        private bool m_HasSourceClient;
+        private ulong m_SourceClientId;
+        private Collider m_ShellCollider;
+        private Vector3 m_LastSweepPosition;
+
+        // Chỉ server cần nguồn bắn để lọc friendly fire; VFX client không phụ thuộc dữ liệu này.
+        public void InitializeNetworkShot(ulong sourceClientId)
+        {
+            m_SourceClientId = sourceClientId;
+            m_HasSourceClient = true;
+        }
 
         public static void PlayLaunchEffectFromShellPrefab(Rigidbody shellPrefab, Transform fireTransform)
         {
@@ -28,6 +41,15 @@ namespace Tanks.Complete
             PlayParticleClone(shellExplosion.m_ExplosionParticles, fireTransform.position, fireTransform.rotation, 0.45f);
         }
 
+        private void Awake()
+        {
+            m_ShellCollider = GetComponent<Collider>();
+            if (m_ShellCollider is CapsuleCollider capsule)
+                m_SweepRadius = Mathf.Max(m_SweepRadius, capsule.radius * MaxScale(transform.lossyScale));
+
+            m_LastSweepPosition = transform.position;
+        }
+
         private void Start ()
         {
             // Hết thời gian sống thì cho đạn nổ. Offline: mọi máy tự xử lý. Online: chỉ server đặt hẹn
@@ -37,6 +59,27 @@ namespace Tanks.Complete
                 Invoke(nameof(ExplodeFromLifetime), m_MaxLifeTime);
         }
 
+        private void FixedUpdate()
+        {
+            if (m_Exploded || !CanExplodeOnThisPeer())
+            {
+                m_LastSweepPosition = transform.position;
+                return;
+            }
+
+            Vector3 currentPosition = transform.position;
+            Vector3 travel = currentPosition - m_LastSweepPosition;
+            float distance = travel.magnitude;
+
+            if (distance > 0.001f && TryFindSweepHit(m_LastSweepPosition, travel / distance, distance, out RaycastHit hit))
+            {
+                transform.position = hit.point;
+                Explode();
+                return;
+            }
+
+            m_LastSweepPosition = currentPosition;
+        }
 
         private void OnTriggerEnter (Collider other)
         {
@@ -58,22 +101,36 @@ namespace Tanks.Complete
 
         private void Explode()
         {
-            bool isOffline = NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening;
-
             // [ONLINE] Chỉ server mới được kích nổ (tính damage + phát VFX đồng bộ). Client bỏ qua
             // trigger cục bộ để tránh nổ lệch vị trí / lệch thời điểm, và tránh despawn đạn của server.
-            if (!isOffline && !NetworkManager.Singleton.IsServer)
+            if (!CanExplodeOnThisPeer())
                 return;
 
             if (m_Exploded) return;
             m_Exploded = true;
 
+            bool isOffline = NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening;
+            GameManager gameManager = isOffline ? null : GetGameManager();
+            var affectedBodies = new HashSet<Rigidbody>();
             Collider[] colliders = Physics.OverlapSphere (transform.position, m_ExplosionRadius, m_TankMask);
             for (int i = 0; i < colliders.Length; i++)
             {
-                Rigidbody targetRigidbody = colliders[i].GetComponent<Rigidbody> ();
-                if (!targetRigidbody)
+                Rigidbody targetRigidbody = colliders[i].attachedRigidbody != null
+                    ? colliders[i].attachedRigidbody
+                    : colliders[i].GetComponent<Rigidbody>();
+                if (!targetRigidbody || !affectedBodies.Add(targetRigidbody))
                     continue;
+
+                if (!isOffline && m_HasSourceClient && gameManager != null)
+                {
+                    NetworkObject targetObject = targetRigidbody.GetComponentInParent<NetworkObject>();
+                    if (targetObject != null &&
+                        gameManager.ShouldIgnoreFriendlyFire(m_SourceClientId, targetObject.OwnerClientId))
+                    {
+                        // Tắt cả damage và lực hất để đồng đội không thể grief nhau.
+                        continue;
+                    }
+                }
 
                 float damage = CalculateDamage (targetRigidbody.position);
                 TankMovement targetMovement = targetRigidbody.GetComponent<TankMovement>();
@@ -104,10 +161,9 @@ namespace Tanks.Complete
                 // Host phát VFX cục bộ ngay, rồi bảo các client còn lại phát trước khi đạn despawn.
                 PlayNetworkedExplosionEffect(transform.position);
 
-                var gm = GetGameManager();
                 NetworkObject networkObject = GetComponent<NetworkObject>();
-                if (gm != null && networkObject != null)
-                    gm.PlayShellExplosion(networkObject.NetworkObjectId, transform.position);
+                if (gameManager != null && networkObject != null)
+                    gameManager.PlayShellExplosion(networkObject.NetworkObjectId, transform.position);
             }
 
             if (CameraControl.Instance != null)
@@ -125,6 +181,49 @@ namespace Tanks.Complete
                 else
                     Destroy(gameObject);
             }
+        }
+
+        private bool CanExplodeOnThisPeer()
+        {
+            return NetworkManager.Singleton == null ||
+                   !NetworkManager.Singleton.IsListening ||
+                   NetworkManager.Singleton.IsServer;
+        }
+
+        private bool TryFindSweepHit(Vector3 origin, Vector3 direction, float distance, out RaycastHit bestHit)
+        {
+            bestHit = default;
+            RaycastHit[] hits = Physics.SphereCastAll(
+                origin,
+                m_SweepRadius,
+                direction,
+                distance,
+                Physics.DefaultRaycastLayers,
+                QueryTriggerInteraction.Ignore);
+
+            float bestDistance = float.PositiveInfinity;
+            bool found = false;
+
+            for (int i = 0; i < hits.Length; i++)
+            {
+                Collider hitCollider = hits[i].collider;
+                if (hitCollider == null || hitCollider == m_ShellCollider || hitCollider.transform.IsChildOf(transform))
+                    continue;
+
+                if (hits[i].distance >= bestDistance)
+                    continue;
+
+                bestDistance = hits[i].distance;
+                bestHit = hits[i];
+                found = true;
+            }
+
+            return found;
+        }
+
+        private static float MaxScale(Vector3 scale)
+        {
+            return Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
         }
 
         private static GameManager s_GameManager;
